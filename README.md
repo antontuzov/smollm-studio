@@ -97,7 +97,8 @@ and UI in search of an inference library.
 4. Press **Load**, then **Chat**.
 
 The first load is a cold read from disk, so it is slower than the numbers you
-see afterwards.
+see afterwards. In this version that conversation is simulated — see the next
+section before you trust any answer.
 
 Prefer the terminal?
 
@@ -107,6 +108,15 @@ smollm models list --sort smallest  # browse the catalog
 smollm models pull qwen2.5-0.5b-instruct-gguf
 smollm run qwen2.5-0.5b-instruct-gguf --prompt "Explain GGUF in two sentences"
 smollm serve --port 8123            # OpenAI-compatible API on loopback
+```
+
+If you would rather have that `smollm` on your PATH than run it out of
+`target/`, the install scripts build from this checkout and drop the binary in
+your user bin directory — no sudo, no download:
+
+```bash
+./scripts/install.sh                  # macOS / Linux -> ~/.local/bin/smollm
+powershell -File scripts/install.ps1  # Windows -> %LOCALAPPDATA%\Programs\smollm
 ```
 
 ## Development setup

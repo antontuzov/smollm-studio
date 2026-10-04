@@ -14,7 +14,9 @@ use smollm_core::chat::{
     TokenUsage,
 };
 use smollm_core::config::Settings;
-use smollm_core::model::{estimate_ram_gb, CatalogStatus, LocalModel, ModelDescriptor, ModelMetadata};
+use smollm_core::model::{
+    estimate_ram_gb, CatalogStatus, LocalModel, ModelDescriptor, ModelMetadata,
+};
 use smollm_core::system::{HardwareReport, ServerConfig};
 use smollm_core::AppPaths;
 use smollm_engine::{benchmark, BenchmarkConfig, EngineKind, EngineManager};
@@ -102,11 +104,32 @@ pub fn hardware(ctx: &mut Context, json: bool) -> Result<()> {
     println!(
         "{}",
         report::key_values(&[
-            ("Platform", format!("{} {}", report_data.platform.label(), report_data.arch)),
-            ("CPU", format!("{} ({} physical / {} logical cores)", report_data.cpu_brand, report_data.physical_cores, report_data.logical_cores)),
-            ("Memory", format!("{:.1} GB total · {:.1} GB available", report_data.total_ram_gb, report_data.available_ram_gb)),
+            (
+                "Platform",
+                format!("{} {}", report_data.platform.label(), report_data.arch)
+            ),
+            (
+                "CPU",
+                format!(
+                    "{} ({} physical / {} logical cores)",
+                    report_data.cpu_brand, report_data.physical_cores, report_data.logical_cores
+                )
+            ),
+            (
+                "Memory",
+                format!(
+                    "{:.1} GB total · {:.1} GB available",
+                    report_data.total_ram_gb, report_data.available_ram_gb
+                )
+            ),
             ("GPU", gpu),
-            ("Disk", format!("{:.1} GB free · {:.1} GB free where models live", report_data.disk_free_gb, report_data.model_volume_free_gb)),
+            (
+                "Disk",
+                format!(
+                    "{:.1} GB free · {:.1} GB free where models live",
+                    report_data.disk_free_gb, report_data.model_volume_free_gb
+                )
+            ),
             ("Models", ctx.paths.models_dir.display().to_string()),
             ("Logs", ctx.paths.logs_dir.display().to_string()),
         ])
@@ -139,7 +162,10 @@ pub fn doctor(ctx: &mut Context, json: bool) -> Result<()> {
         engine_kind("auto")?.as_str()
     );
     if !report_data.recommended_models.is_empty() {
-        println!("  start with: {}", report_data.recommended_models.join(", "));
+        println!(
+            "  start with: {}",
+            report_data.recommended_models.join(", ")
+        );
     }
     for warning in &report_data.warnings {
         println!("  ! {warning}");
@@ -203,8 +229,14 @@ pub fn list_catalog(
             ]
         })
         .collect();
-    print!("{}", report::table(&["id", "params", "quant", "size", "state"], &rows));
-    println!("\n{} model(s). Download one with `smollm models pull <id>`.", rows.len());
+    print!(
+        "{}",
+        report::table(&["id", "params", "quant", "size", "state"], &rows)
+    );
+    println!(
+        "\n{} model(s). Download one with `smollm models pull <id>`.",
+        rows.len()
+    );
     Ok(())
 }
 
@@ -253,10 +285,7 @@ pub async fn pull(ctx: &Context, raw: &str, force: bool) -> Result<()> {
                 close_progress(tty);
                 println!(
                     "Saved {} ({} bytes) in {} ms → {}",
-                    completed.model_id,
-                    completed.size_bytes,
-                    completed.elapsed_ms,
-                    completed.path
+                    completed.model_id, completed.size_bytes, completed.elapsed_ms, completed.path
                 );
                 return Ok(());
             }
@@ -294,7 +323,9 @@ pub fn list_local(ctx: &Context, json: bool) -> Result<()> {
         return print_json(&models);
     }
     if models.is_empty() {
-        println!("Nothing downloaded yet. Try `smollm models list`, then `smollm models pull <id>`.");
+        println!(
+            "Nothing downloaded yet. Try `smollm models list`, then `smollm models pull <id>`."
+        );
         return Ok(());
     }
     let rows: Vec<Vec<String>> = models
@@ -312,7 +343,10 @@ pub fn list_local(ctx: &Context, json: bool) -> Result<()> {
             ]
         })
         .collect();
-    print!("{}", report::table(&["file", "catalog id", "size", "note"], &rows));
+    print!(
+        "{}",
+        report::table(&["file", "catalog id", "size", "note"], &rows)
+    );
     println!(
         "\n{} file(s), {} total in {}",
         models.len(),
@@ -509,7 +543,11 @@ pub async fn serve(ctx: &mut Context, args: &ServeArgs) -> Result<()> {
             "Loaded {} on the {} engine{}",
             response.handle.model_id,
             response.engine,
-            if response.simulated { " (simulated)" } else { "" }
+            if response.simulated {
+                " (simulated)"
+            } else {
+                ""
+            }
         );
     }
 
@@ -695,7 +733,9 @@ fn build_load_request(
     };
 
     if on_disk {
-        let size_mb = std::fs::metadata(&path).map(|meta| meta.len() / 1_000_000).unwrap_or(0);
+        let size_mb = std::fs::metadata(&path)
+            .map(|meta| meta.len() / 1_000_000)
+            .unwrap_or(0);
         let needed = estimate_ram_gb(size_mb, options.context_length);
         let available = ctx.hardware().available_ram_gb;
         if needed > available {
@@ -741,7 +781,9 @@ fn engine_kind(flag: &str) -> Result<EngineKind> {
         None
     } else {
         Some(EngineKind::parse(trimmed).ok_or_else(|| {
-            anyhow::anyhow!("unknown engine `{trimmed}`; use auto | mock | llama-cpp | candle | gguf-metadata")
+            anyhow::anyhow!(
+                "unknown engine `{trimmed}`; use auto | mock | llama-cpp | candle | gguf-metadata"
+            )
         })?)
     };
 
