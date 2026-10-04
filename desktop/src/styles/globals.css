@@ -1,0 +1,124 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* SmolLLM Studio palette. Light is how the app opens; dark is a fully tuned
+   alternate, not a desaturated copy of the light ramp. */
+@layer base {
+  :root {
+    --background: 220 16% 97%;
+    --foreground: 220 12% 16%;
+    --card: 0 0% 100%;
+    --card-foreground: 220 12% 16%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 12% 16%;
+    --primary: 251 72% 58%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 14% 93%;
+    --secondary-foreground: 220 12% 22%;
+    --muted: 220 14% 93%;
+    --muted-foreground: 220 8% 43%;
+    --accent: 189 78% 28%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 70% 48%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 142 62% 34%;
+    --success-foreground: 0 0% 100%;
+    --border: 220 12% 88%;
+    --input: 220 12% 82%;
+    --ring: 251 72% 58%;
+    --radius: 0.625rem;
+  }
+
+  .dark {
+    --background: 213 29% 6%;
+    --foreground: 220 14% 91%;
+    --card: 221 39% 11%;
+    --card-foreground: 220 14% 91%;
+    --popover: 221 41% 13%;
+    --popover-foreground: 220 14% 91%;
+    --primary: 251 86% 67%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 26% 18%;
+    --secondary-foreground: 220 14% 91%;
+    --muted: 220 26% 16%;
+    --muted-foreground: 218 11% 65%;
+    --accent: 189 94% 43%;
+    --accent-foreground: 8 39% 9%;
+    --destructive: 0 72% 55%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 152 62% 45%;
+    --success-foreground: 8 39% 9%;
+    --border: 220 14% 91% / 0.08;
+    --input: 220 14% 91% / 0.14;
+    --ring: 251 86% 67%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04";
+    /* The window is the app: no scrollbars on the shell itself. */
+    overflow: hidden;
+  }
+
+  ::selection {
+    @apply bg-primary/25;
+  }
+
+  /* Thin, quiet scrollbars that match the surface. */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-muted-foreground/25;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-muted-foreground/40;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  :focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+  }
+}
+
+@layer components {
+  .panel {
+    @apply rounded-xl border bg-card text-card-foreground shadow-soft;
+  }
+
+  .stat-value {
+    @apply text-2xl font-semibold tabular-nums tracking-tight;
+  }
+
+  .grid-backdrop {
+    background-image: radial-gradient(circle at 1px 1px, hsl(var(--border)) 1px, transparent 0);
+    background-size: 22px 22px;
+  }
+}
+
+/* Respect a user who asked the OS to stop moving things around. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

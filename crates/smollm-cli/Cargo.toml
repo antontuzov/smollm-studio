@@ -1,0 +1,28 @@
+[package]
+name = "smollm-cli"
+description = "Optional command line interface for SmolLLM Studio"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "smollm"
+path = "src/main.rs"
+
+[dependencies]
+smollm-core.workspace = true
+smollm-engine.workspace = true
+smollm-models.workspace = true
+smollm-hardware.workspace = true
+smollm-server.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tokio.workspace = true
+clap.workspace = true
+uuid.workspace = true
+futures.workspace = true

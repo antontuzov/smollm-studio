@@ -1,0 +1,75 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/smollm-core",
+  "crates/smollm-engine",
+  "crates/smollm-models",
+  "crates/smollm-hardware",
+  "crates/smollm-server",
+  "crates/smollm-cli",
+  "desktop/src-tauri",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77"
+license = "MIT"
+authors = ["SmolLLM Studio contributors"]
+repository = "https://github.com/smollm-studio/smollm-studio"
+homepage = "https://github.com/smollm-studio/smollm-studio"
+
+[workspace.dependencies]
+# --- internal crates ---
+smollm-core = { path = "crates/smollm-core" }
+smollm-engine = { path = "crates/smollm-engine" }
+smollm-models = { path = "crates/smollm-models" }
+smollm-hardware = { path = "crates/smollm-hardware" }
+smollm-server = { path = "crates/smollm-server" }
+
+# --- async / runtime ---
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+futures = "0.3"
+futures-util = "0.3"
+async-trait = "0.1"
+
+# --- serialization ---
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# --- errors / logging ---
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# --- http / downloads ---
+reqwest = { version = "0.12", default-features = false, features = [
+  "json",
+  "stream",
+  "rustls-tls",
+] }
+axum = { version = "0.8", features = ["tokio", "macros"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+
+# --- system / files ---
+sysinfo = "0.33"
+fs2 = "0.4"
+sha2 = "0.10"
+hex = "0.4"
+walkdir = "2"
+
+# --- misc ---
+uuid = { version = "1", features = ["v4", "serde"] }
+clap = { version = "4", features = ["derive"] }
+
+# --- desktop ---
+tauri = { version = "2", features = [] }
+tauri-build = { version = "2", features = [] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "unwind"

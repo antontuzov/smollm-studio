@@ -1,0 +1,26 @@
+[package]
+name = "smollm-server"
+description = "Local OpenAI-compatible HTTP server backed by the engine abstraction"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+smollm-core.workspace = true
+smollm-engine.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+futures.workspace = true
+axum.workspace = true
+tower-http.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+reqwest.workspace = true

@@ -1,0 +1,278 @@
+# SmolLLM Studio
+
+**Run small local LLMs beautifully on macOS and Windows.**
+
+SmolLLM Studio is a lightweight Rust/Tauri desktop app for running small local
+language models. It focuses on 0.5B–4B GGUF models, automatic hardware
+recommendations, one-click downloads, a chat UI that streams tokens, and an
+OpenAI-compatible server on loopback — all on your own machine.
+
+There is no account, no API key and no telemetry. The only network traffic the
+app ever makes is the model download you explicitly ask for. There is no
+update pinger, no analytics, and no background request of any kind — the HTTP
+server you start stays on `127.0.0.1`.
+
+![Home](assets/screenshots/home.png)
+![Chat](assets/screenshots/chat.png)
+![Server](assets/screenshots/server.png)
+
+> Screenshots are not committed to this repository, so the three tags above are
+> broken until you add them. See
+> [assets/screenshots/README.md](assets/screenshots/README.md) for the five
+> captures that belong here and how to take them.
+
+---
+
+## Please read this first: what is real, and what is a seam
+
+SmolLLM Studio is honest about itself, and so is this README.
+
+**Working today**
+
+- The curated catalog, hardware detection, the doctor report and the
+  RAM-fit maths that drives every recommendation.
+- Resumable downloads from Hugging Face with `.part` files, SHA-256
+  verification and a live transfer list.
+- GGUF metadata parsing straight from the file header (architecture,
+  quantisation, context length, tensor count, license).
+- The whole UI: eight pages, streaming chat, sampling controls, server page
+  with copyable client snippets, benchmarks, log viewer, settings.
+- An OpenAI-compatible HTTP server (`/v1/chat/completions`, `/v1/completions`,
+  `/v1/models`, `/v1/engine/metrics`) with `stream: true` over SSE.
+- A command-line twin (`smollm`) that shares every crate with the desktop app.
+
+**Not wired up yet**
+
+- **Real inference.** The default build ships `MockEngine`, which produces
+  token-by-token output that *looks* like generation so the entire streaming,
+  cancellation and metrics path can be exercised end to end. It does not read
+  weights, and what it says is not the model's answer. Every screen that can
+  show it labels it **simulated**.
+- Native backends live behind two opt-in Cargo features, `llama-cpp` and
+  `candle`, and both are clearly marked adapters with a `TODO` at the seam
+  rather than working inference. Enabling a flag does not download llama.cpp.
+
+We deliberately did not rewrite llama.cpp. Instead the engine is an
+abstraction (`Engine` + `EngineManager`) with one integration point per
+backend, so wiring a real one is a contained change:
+[crates/smollm-engine/src/llama.rs](crates/smollm-engine/src/llama.rs). Until
+that happens, treat this as a very good front end, catalog, downloader, server
+and UI in search of an inference library.
+
+---
+
+## Why SmolLLM Studio
+
+- **Small models only.** 0.5B–4B at Q4 is the sweet spot for a laptop: seconds
+  to load, usable speed, no discrete GPU required. The catalog is curated for
+  that band instead of pretending your MacBook Pro runs Llama 70B.
+- **It measures your machine first.** `sysinfo` reads RAM, cores and GPU at
+  launch; the doctor tells you the largest band that will actually fit, and
+  every model card says whether it fits *right now*.
+- **Local by default, provably.** Loopback-only server, plain JSON settings on
+  disk, one data folder you can open from the app, and a diagnostics export for
+  bug reports.
+- **Two surfaces, one core.** The desktop app and the CLI are both thin shells
+  over the same five crates. Anything you can do in the UI you can script.
+- **Premium, not heavy.** Rust and Tauri: no bundled Chromium, no Python
+  runtime, no Node sidecar.
+
+## Supported platforms
+
+| Platform | Status | Notes |
+| --- | --- | --- |
+| macOS 12+ (Apple Silicon) | Supported | Primary development target |
+| macOS 12+ (Intel) | Supported | CPU inference only |
+| Windows 10 / 11 (x64) | Supported | WebView2 is required (present on Windows 11) |
+| Linux | Builds and runs | Not a packaging target; use the CLI |
+
+## Quickstart
+
+1. Download the latest release:
+   - macOS: `SmolLLM_0.1.0_aarch64.dmg`
+   - Windows: `SmolLLM_0.1.0_x64-setup.exe` (or the `.msi`)
+2. Open it. The app detects your hardware and shows what will fit.
+3. On the **Models** page, press **Download** on something small — Qwen2.5 0.5B
+   or SmolLM2 360M are good first runs.
+4. Press **Load**, then **Chat**.
+
+The first load is a cold read from disk, so it is slower than the numbers you
+see afterwards.
+
+Prefer the terminal?
+
+```bash
+smollm doctor                       # what can this machine run?
+smollm models list --sort smallest  # browse the catalog
+smollm models pull qwen2.5-0.5b-instruct-gguf
+smollm run qwen2.5-0.5b-instruct-gguf --prompt "Explain GGUF in two sentences"
+smollm serve --port 8123            # OpenAI-compatible API on loopback
+```
+
+## Development setup
+
+You need Rust 1.77+, Node 20+ with corepack, and pnpm 9.
+
+```bash
+git clone https://github.com/smollm-studio/smollm-studio
+cd smollm-studio
+
+# 1. Rust workspace: engine, catalog, downloader, server, CLI
+cargo build --workspace
+
+# 2. Frontend + desktop shell
+cd desktop
+corepack enable
+pnpm install
+pnpm tauri dev    # starts Vite on :1420 and the native window
+```
+
+`pnpm dev` alone gives you the UI in a browser with every command failing into
+its error state — handy for styling, useless for data.
+
+Release bundles:
+
+```bash
+cd desktop && pnpm tauri build
+```
+
+Checks, all of which CI enforces:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --all
+cd desktop && pnpm typecheck && pnpm lint && pnpm build
+```
+
+Bundling needs the Tauri system prerequisites for your OS, described at
+<https://tauri.app/start/prerequisites/>.
+
+## Model support
+
+The bundled catalog holds 11 entries, all in the 0.36B–4B band, all Q4-class
+quantisations, and all `verified` — meaning the Hugging Face repository and file
+name were confirmed against the resolver. Entries you add through
+`catalog.local.json` are marked `placeholder` until verified.
+
+| Model | Params | Download | Context | Notes |
+| --- | --- | --- | --- | --- |
+| SmolLM2 360M Instruct | 0.36B | 271 MB | 8K | Fastest thing worth chatting with |
+| Qwen2.5 0.5B Instruct | 0.5B | 491 MB | 32K | Best tiny all-rounder |
+| Gemma 3 1B IT (QAT) | 1.0B | 720 MB | 8K | Quantisation-aware training |
+| Llama 3.2 1B Instruct | 1.24B | 808 MB | 131K | Long context in a small package |
+| Qwen2.5 1.5B Instruct | 1.54B | 1.1 GB | 32K | Noticeably better reasoning |
+| DeepSeek R1 Distill Qwen 1.5B | 1.54B | 1.1 GB | 8K | Emits a reasoning trace before answering |
+| SmolLM2 1.7B Instruct | 1.71B | 1.1 GB | 8K | Balanced Hugging Face model |
+| Qwen2.5 3B Instruct | 3.1B | 2.1 GB | 32K | Approaches useful coding help |
+| Llama 3.2 3B Instruct | 3.2B | 2.0 GB | 131K | Strong instruction following |
+| Phi-3 Mini 4K Instruct | 3.8B | 2.4 GB | 4K | Dense reasoning for its size |
+| Gemma 3 4B IT (QAT) | 4.0B | 2.5 GB | 8K | The ceiling this app recommends |
+
+Any other GGUF file works too: drop it into the model folder (Settings shows the
+path, with a **Model folder** button) and it appears in the Library, parsed from
+its own header. Model licenses differ — check the card if you plan to ship
+something.
+
+## Hardware recommendations
+
+The app computes this per machine; the table is the rule of thumb behind it.
+Weights are estimated as `file size + KV cache + ~350 MB of runtime`, and only
+70% of currently free RAM counts as usable.
+
+| RAM | Comfortable band | Expect |
+| --- | --- | --- |
+| 4 GB | 0.36B–0.5B | Close other apps; short contexts |
+| 8 GB | up to 1.5B | The intended experience for most people |
+| 16 GB | up to 3B–4B | Room for longer prompts and a second app |
+| 32 GB+ | 4B and beyond | This app still caps its advice at 4B on purpose |
+
+Disk: 5 GB free covers the whole catalog. GPU: not required. Apple Silicon and
+CUDA both help once a native backend is wired in; today the mock engine runs on
+CPU everywhere. Details in [docs/hardware.md](docs/hardware.md).
+
+## OpenAI-compatible API
+
+Start it from the **Server** page or with `smollm serve --port 8123`, then point
+any OpenAI client at `http://127.0.0.1:8123/v1`.
+
+```bash
+curl http://127.0.0.1:8123/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen2.5-0.5b-instruct-gguf",
+    "messages": [{"role": "user", "content": "One line about local models."}],
+    "stream": true
+  }'
+```
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://127.0.0.1:8123/v1", api_key="unused")
+
+stream = client.chat.completions.create(
+    model="qwen2.5-0.5b-instruct-gguf",
+    messages=[{"role": "user", "content": "One line about local models."}],
+    stream=True,
+)
+for chunk in stream:
+    print(chunk.choices[0].delta.content or "", end="", flush=True)
+```
+
+No key is checked, which is safe only because the server refuses to bind to
+anything but loopback. The Server page generates both snippets with your actual
+port and model filled in. Full reference:
+[docs/api.md](docs/api.md).
+
+## How it is laid out
+
+```
+crates/
+  smollm-core       domain types, errors, config, paths, GGUF metadata
+  smollm-engine     InferenceEngine trait, MockEngine, GGUF reader, benchmark
+  smollm-models     catalog, Hugging Face resolver, resumable downloads, library
+  smollm-hardware   sysinfo detection, GPU probing, the doctor
+  smollm-server     Axum OpenAI-compatible API
+  smollm-cli        the `smollm` binary
+desktop/
+  src/              React + TypeScript UI (8 pages)
+  src-tauri/        29 commands, event bridge, tray, bundling
+```
+
+## Roadmap
+
+In order, and none of it promised:
+
+1. **Real inference** — a llama.cpp adapter behind the `llama-cpp` feature,
+   with the mock engine kept for tests and demos. This is the whole point.
+2. Token-by-token context pressure warnings, and KV-cache quantisation.
+3. Chat history persistence and prompt templates per model family.
+4. A GGUF conversion/import helper for local files not in the catalog.
+5. Auto-update via the Tauri updater plugin, replacing today's "a newer release
+   exists" notice.
+6. More catalog coverage: multilingual, code-tuned and vision-capable small
+   models, each verified the same way.
+
+## License
+
+MIT — see [LICENSE](LICENSE). Your models stay yours; their licenses travel
+with them.
+
+## Contributing
+
+Issues and pull requests are welcome, especially for item 1 above. Start with
+[CONTRIBUTING.md](CONTRIBUTING.md);
+[docs/getting-started.md](docs/getting-started.md) covers the first build.
+
+## Credits
+
+- [llama.cpp](https://github.com/ggml-org/llama.cpp) and the
+  [GGUF format](https://huggingface.co/docs/hub/gguf) — the reason small models
+  run on laptops at all. This app does not contain llama.cpp code.
+- [Hugging Face](https://huggingface.co) — hosts every model file this app can
+  download, and publishes SmolLM2, Qwen, Llama, Gemma, Phi and DeepSeek
+  distills.
+- The [Tauri](https://tauri.app), [Axum](https://docs.rs/axum),
+  [Tokio](https://tokio.rs), [React](https://react.dev) and
+  [TanStack Query](https://tanstack.com/query) projects.

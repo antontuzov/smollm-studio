@@ -1,0 +1,8 @@
+/target
+dist
+node_modules
+*.log
+.DS_Store
+.env
+desktop/src-tauri/gen/schemas
+assets/screenshots/*.png

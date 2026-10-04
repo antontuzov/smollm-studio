@@ -1,0 +1,31 @@
+[package]
+name = "smollm-engine"
+description = "Engine abstraction layer: MockEngine, GGUF metadata engine and feature-flagged native adapters"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["mock"]
+mock = []
+# Native llama.cpp integration is intentionally opt-in: enabling the flag
+# requires the vendored llama.cpp sources + a C/C++ toolchain (see docs/models.md).
+llama-cpp = []
+# Pure-Rust Candle backend, experimental.
+candle = []
+
+[dependencies]
+smollm-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+futures.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["full", "test-util"] }

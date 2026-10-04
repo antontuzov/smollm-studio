@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_LOG: warn
+
+jobs:
+  rust:
+    name: Rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup default stable
+        shell: bash
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (all targets, all features)
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Tests
+        run: cargo test --all
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable pnpm through corepack
+        run: corepack enable && corepack prepare --activate
+        shell: bash
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/desktop/node_modules
+          key: pnpm-${{ hashFiles('desktop/pnpm-lock.yaml') }}
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Build
+        run: pnpm build
+
+  # The default `mock` engine must never need a GPU, a C++ toolchain or the
+  # network: this job is the guard against accidentally making it so.
+  cli-smoke:
+    name: CLI smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build the CLI
+        run: cargo build -p smollm-cli --bin smollm
+
+      - name: hardware
+        run: cargo run -q -p smollm-cli --bin smollm -- hardware
+
+      - name: models list
+        run: cargo run -q -p smollm-cli --bin smollm -- models list --json
+
+      - name: serve snippets
+        run: cargo run -q -p smollm-cli --bin smollm -- serve --examples-only

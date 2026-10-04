@@ -1,0 +1,108 @@
+# Getting started
+
+Three things to know before you start:
+
+1. Everything lives on your machine — no account, no key, no telemetry.
+2. The default build answers with a **simulated** engine. The UI, downloads,
+   server and benchmarks are real; the words are not. See
+   [README — what is real](../README.md#please-read-this-first-what-is-real-and-what-is-a-seam).
+3. The app is a 1024×640 minimum window. Below that, the layout starts
+   stacking.
+
+## Install
+
+### From a release
+
+| | |
+| --- | --- |
+| macOS (Apple Silicon) | `SmolLLM_0.1.0_aarch64.dmg` |
+| macOS (Intel) | `SmolLLM_0.1.0_x64.dmg` |
+| Windows | `SmolLLM_0.1.0_x64-setup.exe` or `.msi` |
+
+Drag the app into `/Applications` on macOS. Unsigned builds trigger Gatekeeper
+the first time: right-click → **Open**, or remove the quarantine attribute with
+`xattr -dr com.apple.quarantine /Applications/SmolLLM\ Studio.app` once you are
+comfortable doing so.
+
+On Windows the installer needs WebView2, which ships with Windows 11 and most
+Windows 10 machines.
+
+### From source
+
+```bash
+git clone https://github.com/smollm-studio/smollm-studio
+cd smollm-studio/desktop
+corepack enable && pnpm install
+pnpm tauri dev
+```
+
+You need Rust 1.77+ and the Tauri prerequisites for your OS
+(<https://tauri.app/start/prerequisites/>).
+
+### Command line only
+
+```bash
+cargo install --path crates/smollm-cli    # installs the `smollm` binary
+smollm doctor
+```
+
+## First run
+
+The app reads your hardware with `sysinfo` at launch and the **Home** page tells
+you the largest model band that fits. Nothing else needs configuring.
+
+1. **Models** → pick something small → **Download**. Progress, speed and
+   remaining time appear on the card and in the sidebar. Closing the window does
+   not cancel a download; an interrupted transfer resumes from its `.part` file.
+2. Press **Load** on the finished model. The top bar pill changes from *engine
+   starting* to the engine name, and the loaded model's name appears next to it.
+3. **Chat** → type. Enter sends, Shift+Enter is a newline, **Stop** abandons the
+   current generation mid-stream.
+
+## Where things live
+
+| | macOS | Windows | Linux |
+| --- | --- | --- | --- |
+| Data root | `~/Library/Application Support/SmolLLM Studio` | `%APPDATA%\SmolLLM Studio` | `~/.local/share/smollm-studio` |
+| Models | `<root>/models` | same | same |
+| Logs | `<root>/logs` | same | same |
+| Settings | `<root>/settings.json` | same | same |
+
+`SMOLLM_STUDIO_DATA_DIR` moves the whole root, which is how you run a portable
+copy off a USB drive. **Settings → Data and privacy** has buttons that open both
+folders, and an **Export diagnostics** action that writes hardware, settings and
+the last log lines into one file for a bug report.
+
+**Settings → Appearance** switches themes: the app opens in light, dark is
+equally tuned, and *Follow the system* tracks the OS setting live.
+
+## First API call
+
+**Server** → **Start**. The page then shows the base URL, a live request log and
+copyable curl/Python snippets already filled in with your port and model.
+
+```bash
+curl http://127.0.0.1:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"qwen2.5-0.5b-instruct-gguf","messages":[{"role":"user","content":"hi"}]}'
+```
+
+The first request may take a moment: if nothing is resident, the server loads
+the default model before answering. Full reference in [api.md](api.md).
+
+## Benchmarks
+
+**Benchmarks** measures cold load time, prompt throughput, generation
+throughput, time to first token and peak resident memory, with repetitions and a
+best-of summary. It spins up its own engine instance so it never competes with
+the chat. Results copy out as a Markdown `| Metric | Value |` table.
+
+With the mock engine these numbers describe streaming overhead, not model
+speed. The page says so on every result.
+
+## Next steps
+
+- [models.md](models.md) — the catalog, quantisations, adding your own GGUF files
+- [hardware.md](hardware.md) — how the RAM-fit advice is computed
+- [api.md](api.md) — the HTTP API and the Tauri command surface
+- [troubleshooting.md](troubleshooting.md) — when something refuses to work

@@ -1,0 +1,20 @@
+[package]
+name = "smollm-hardware"
+description = "Hardware detection, capability probing and small-model recommendations"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+smollm-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+sysinfo.workspace = true
+fs2.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
