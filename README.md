@@ -31,8 +31,9 @@ SmolLLM Studio is honest about itself, and so is this README.
 
 - The curated catalog, hardware detection, the doctor report and the
   RAM-fit maths that drives every recommendation.
-- Resumable downloads from Hugging Face with `.part` files, SHA-256
-  verification and a live transfer list.
+- Resumable downloads from Hugging Face: `.part` files with provenance-checked
+  resume, SHA-256 and GGUF-header verification, bounded auto-retry on flaky
+  networks, cancel and retry buttons, and a live transfer list.
 - GGUF metadata parsing straight from the file header (architecture,
   quantisation, context length, tensor count, license).
 - The whole UI: eight pages, streaming chat, sampling controls, server page

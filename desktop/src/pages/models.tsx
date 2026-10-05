@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Boxes, Filter, RefreshCw, Search, SlidersHorizontal, X } from "lucide-react";
 
-import { cancelDownload, loadModel, pullModel } from "@/lib/actions";
+import { cancelDownload, loadModel, pullModel, retryDownload } from "@/lib/actions";
 import { describeError } from "@/lib/format";
 import { useCatalog, useCatalogFacets } from "@/lib/queries";
 import { useDownloads, useEngine } from "@/stores/engine";
@@ -13,7 +13,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { EmptyState, ErrorState, SkeletonCards } from "@/components/ui/feedback";
 import { Input, Select, Switch } from "@/components/ui/field";
 
-import type { CatalogEntry, CatalogFilterInput, FacetValue } from "@/lib/types";
+import type { CatalogEntry, CatalogFilterInput, DownloadTask, FacetValue } from "@/lib/types";
 
 const sortOptions = [
   { value: "recommended", label: "Recommended for this machine" },
@@ -113,10 +113,13 @@ export function ModelsPage() {
     setFilters(defaultFilters);
   };
 
-  const downloadIdFor = useMemo(() => {
-    const map = new Map<string, string>();
+  const newestTaskFor = useMemo(() => {
+    const map = new Map<string, DownloadTask>();
     for (const task of Object.values(tasks)) {
-      map.set(task.modelId, task.id);
+      const current = map.get(task.modelId);
+      if (!current || task.startedMs >= current.startedMs) {
+        map.set(task.modelId, task);
+      }
     }
     return map;
   }, [tasks]);
@@ -266,9 +269,18 @@ export function ModelsPage() {
                   }
                 }}
                 onCancel={(id) => {
-                  const downloadId = downloadIdFor.get(id);
-                  if (downloadId) {
-                    void cancelDownload(downloadId);
+                  const task = newestTaskFor.get(id);
+                  if (task) {
+                    void cancelDownload(task.id);
+                  }
+                }}
+                onRetry={(id) => {
+                  const task = newestTaskFor.get(id);
+                  if (task) {
+                    void retryDownload(task.id);
+                  } else {
+                    // Nothing in memory to resume: start over through the same path.
+                    void pullModel(id);
                   }
                 }}
               />

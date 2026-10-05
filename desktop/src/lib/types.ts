@@ -119,6 +119,9 @@ export interface CatalogEntry extends ModelDescriptor {
   fitsMemory: boolean;
   downloading: boolean;
   downloadPercent: number;
+  /** State of this model's newest transfer, or `null` if there never was one. */
+  downloadState: DownloadState | null;
+  downloadError: string | null;
 }
 
 export interface ModelMetadata {
@@ -150,6 +153,7 @@ export interface LocalModel {
 export type DownloadState =
   | "queued"
   | "running"
+  | "retrying"
   | "verifying"
   | "complete"
   | "cancelled"
@@ -172,6 +176,8 @@ export interface DownloadTask {
   finishedMs: number | null;
   resumed: boolean;
   sha256: string | null;
+  /** 1 until a transient network failure forces a resumed attempt. */
+  attempt: number;
 }
 
 export interface DownloadProgress {
@@ -184,6 +190,8 @@ export interface DownloadProgress {
   percent: number;
   bytesPerSecond: number;
   error: string | null;
+  attempt: number;
+  maxAttempts: number;
 }
 
 export interface DownloadCompleted {

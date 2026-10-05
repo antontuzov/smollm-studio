@@ -29,10 +29,19 @@ that exist without a catalog entry.
 
 ## `download_failed`
 
-Network, a revoked Hugging Face revision, or a moved file. The task keeps its
-`.part` file, so **Retry** in the Transfers list resumes from the last byte
-rather than starting over. If it fails at exactly the same offset twice, the
-remote file has probably changed — delete the `.part` file and pull again.
+Network, a revoked Hugging Face revision, or a moved file. Transient breakage —
+a dropped connection, a timeout, `429`, `5xx` — is retried automatically up to
+four times, so a row that says *retrying (attempt 2 of 4)* needs nothing from
+you. A terminal failure keeps its `.part` file, so **Retry** in the Transfers
+list resumes from the last byte rather than starting over.
+
+If it fails at exactly the same offset twice, the remote file has probably
+changed; the app discards the mismatched partial by itself when the recorded
+`ETag` or URL differs, so a plain retry is usually enough.
+
+A message about *consent* or an *Accept licence* means the repo is gated: sign in
+on huggingface.co, accept the model licence, and retry. A `404` means the
+filename or revision in the catalog no longer exists upstream.
 
 ## `download_cancelled`
 

@@ -46,6 +46,10 @@ pub struct CatalogEntry {
     pub fits_memory: bool,
     pub downloading: bool,
     pub download_percent: f64,
+    /// The state of this model's most recent transfer, so a card can say
+    /// *retrying* rather than *running* and offer Retry after a failure.
+    pub download_state: Option<DownloadState>,
+    pub download_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -237,21 +241,19 @@ pub async fn list_catalog_models(
         let mut entries: Vec<CatalogEntry> = models
             .into_iter()
             .map(|model| {
-                let task = tasks.iter().find(|task| task.model_id == model.id);
+                let task = tasks
+                    .iter()
+                    .filter(|task| task.model_id == model.id)
+                    .max_by_key(|task| task.started_ms);
                 let estimated = model.estimated_ram_gb(model.context_length);
                 CatalogEntry {
                     downloaded: on_disk.contains(&model.id),
                     estimated_ram_gb: estimated,
                     fits_memory: estimated <= usable_ram,
-                    downloading: task.is_some_and(|task| {
-                        matches!(
-                            task.state,
-                            DownloadState::Queued
-                                | DownloadState::Running
-                                | DownloadState::Verifying
-                        )
-                    }),
+                    downloading: task.is_some_and(|task| task.state.is_active()),
                     download_percent: task.map_or(0.0, |task| task.percent),
+                    download_state: task.map(|task| task.state),
+                    download_error: task.and_then(|task| task.error.clone()),
                     model,
                 }
             })
@@ -759,7 +761,7 @@ fn advertise_all(shared: &SharedState, state: &Arc<AppState>) {
     shared.advertise(&ids);
 }
 
-fn refresh_advertised(app: &AppHandle, state: &Arc<AppState>) {
+pub(crate) fn refresh_advertised(app: &AppHandle, state: &Arc<AppState>) {
     if let Some(shared) = state.server_state() {
         advertise_all(&shared, state);
         let _ = app.emit("server-models-updated", ());

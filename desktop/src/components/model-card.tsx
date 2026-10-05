@@ -1,7 +1,13 @@
-import { Ban, Download, MessageSquare, Play } from "lucide-react";
+import { Ban, Download, MessageSquare, Play, RotateCw } from "lucide-react";
 
 import { formatMegabytes } from "@/lib/format";
-import { capitalize, downloadStateLabel, ratingTone } from "@/lib/presentation";
+import {
+  capitalize,
+  downloadStateLabel,
+  downloadStateTone,
+  ratingTone,
+} from "@/lib/presentation";
+import { isRetryable } from "@/stores/engine";
 import { Badge, StatusPill } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -16,6 +22,7 @@ interface ModelCardProps {
   onLoad: (id: string) => void;
   onChat: (id: string) => void;
   onCancel: (id: string) => void;
+  onRetry: (id: string) => void;
   busy?: boolean;
   className?: string;
 }
@@ -26,9 +33,12 @@ export function ModelCard({
   onLoad,
   onChat,
   onCancel,
+  onRetry,
   busy = false,
   className,
 }: ModelCardProps) {
+  const state = model.downloadState ?? "queued";
+  const failed = !model.downloaded && !model.downloading && isRetryable(state);
   return (
     <Card
       className={cn(
@@ -93,13 +103,44 @@ export function ModelCard({
       {model.downloading ? (
         <div className="mt-3 space-y-2 rounded-lg border bg-background/60 px-3 py-2.5">
           <div className="flex items-center justify-between gap-2 text-[11px]">
-            <StatusPill tone="info" label={downloadStateLabel("running")} pulse />
+            <StatusPill
+              tone={downloadStateTone(state)}
+              label={downloadStateLabel(state)}
+              pulse
+            />
             <span className="tabular-nums text-muted-foreground">{model.downloadPercent.toFixed(0)}%</span>
           </div>
           <Progress value={model.downloadPercent} tone="accent" />
+          {state === "retrying" && model.downloadError ? (
+            // Automatic recovery: worth showing the reason, alarming in tone it is not.
+            <p className="text-[11px] leading-relaxed text-amber-700 dark:text-amber-300">
+              {model.downloadError}
+            </p>
+          ) : null}
           <Button variant="outline" size="sm" onClick={() => onCancel(model.id)}>
             <Ban />
             Cancel download
+          </Button>
+        </div>
+      ) : failed ? (
+        <div className="mt-3 space-y-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2.5">
+          <div className="flex items-center justify-between gap-2 text-[11px]">
+            <StatusPill tone={downloadStateTone(state)} label={downloadStateLabel(state)} />
+            {model.downloadPercent > 0 ? (
+              <span className="tabular-nums text-muted-foreground">
+                {model.downloadPercent.toFixed(0)}% kept
+              </span>
+            ) : null}
+          </div>
+          {model.downloadPercent > 0 ? (
+            <Progress value={model.downloadPercent} tone="accent" />
+          ) : null}
+          {model.downloadError ? (
+            <p className="text-[11px] leading-relaxed text-destructive">{model.downloadError}</p>
+          ) : null}
+          <Button size="sm" variant="secondary" onClick={() => onRetry(model.id)} disabled={busy}>
+            <RotateCw />
+            Retry download
           </Button>
         </div>
       ) : (

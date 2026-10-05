@@ -11,6 +11,7 @@ pub const USER_AGENT: &str = concat!("SmolLLM-Studio/", env!("CARGO_PKG_VERSION"
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteFile {
+    /// Where the file is downloaded from (never the metadata endpoint).
     pub url: String,
     pub size_bytes: Option<u64>,
     pub etag: Option<String>,
@@ -94,9 +95,14 @@ struct HfFileMetadata {
 }
 
 /// Blocking-free Hugging Face client.
+///
+/// `endpoint` is normally `https://huggingface.co`; it is a field rather than a
+/// constant so tests can drive the whole download path against a localhost
+/// server instead of the internet.
 #[derive(Debug, Clone)]
 pub struct HfClient {
     http: reqwest::Client,
+    endpoint: String,
 }
 
 impl Default for HfClient {
@@ -118,17 +124,52 @@ impl HfClient {
     }
 
     pub fn with_client(http: reqwest::Client) -> Self {
-        Self { http }
+        Self {
+            http,
+            endpoint: "https://huggingface.co".to_string(),
+        }
+    }
+
+    /// Point the client at another host, e.g. `http://127.0.0.1:8025`.
+    #[must_use]
+    pub fn with_endpoint(mut self, endpoint: &str) -> Self {
+        self.endpoint = endpoint.trim_end_matches('/').to_string();
+        self
     }
 
     pub fn http(&self) -> &reqwest::Client {
         &self.http
     }
 
+    /// The download URL this client would fetch a model from.
+    pub fn resolve_url(&self, model: &ModelDescriptor) -> String {
+        format!(
+            "{}/resolve/{}/{}/{}",
+            self.endpoint,
+            model.hf_repo.trim_matches('/'),
+            model.revision.trim_matches('/'),
+            model.filename.trim_start_matches('/')
+        )
+    }
+
+    fn probe_url(&self, model: &ModelDescriptor) -> String {
+        format!(
+            "{}/api/models/{}/resolve/{}/{}",
+            self.endpoint,
+            model.hf_repo.trim_matches('/'),
+            model.revision.trim_matches('/'),
+            model.filename.trim_start_matches('/')
+        )
+    }
+
     /// Ask the HF API for the authoritative size/sha of a model file.
+    ///
+    /// The `url` it reports is always the *download* URL, not the metadata
+    /// endpoint it was probed from.
     pub async fn probe(&self, model: &ModelDescriptor) -> AppResult<RemoteFile> {
-        let url = metadata_url(&model.hf_repo, &model.revision, &model.filename);
-        let response = self.http.get(&url).send().await.map_err(|source| {
+        let api_url = self.probe_url(model);
+        let url = self.resolve_url(model);
+        let response = self.http.get(&api_url).send().await.map_err(|source| {
             AppError::DownloadFailed(format!("cannot reach Hugging Face: {source}"))
         })?;
         let status = response.status().as_u16();
@@ -152,12 +193,14 @@ impl HfClient {
         })?;
         let metadata: HfFileMetadata = serde_json::from_str(&text).map_err(|source| {
             AppError::DownloadFailed(format!(
-                "unexpected Hugging Face metadata for {url}: {source}"
+                "unexpected Hugging Face metadata for {api_url}: {source}"
             ))
         })?;
 
         Ok(RemoteFile {
-            size_bytes: metadata.size.or(Some(model.size_mb * 1_000_000)),
+            size_bytes: metadata
+                .size
+                .or_else(|| (model.size_mb > 0).then(|| model.size_mb.saturating_mul(1_000_000))),
             etag: metadata.etag.map(|etag| etag.trim_matches('"').to_string()),
             // An optional `sha256` has to come from the catalog or the user:
             // the resolve API reports a commit hash instead of a blob digest.

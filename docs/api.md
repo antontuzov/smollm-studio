@@ -127,7 +127,11 @@ snake_case in Rust. Every rejection serialises to `{ code, message, detail }`.
 (`query`, `sort`, `minParametersB`, `maxParametersB`, `quantization`, `tag`,
 `license`, `architecture`, `hidePlaceholders`) plus `downloaded`, which is
 `true`, `false` or `null` for "both". Empty strings mean "any", not "match
-nothing". `catalog_facets` returns the distinct values behind those dropdowns,
+nothing". Each entry is also enriched with `downloaded`, `estimatedRamGb`,
+`fitsMemory`, `downloading`, `downloadPercent` and the newest transfer's
+`downloadState` plus `downloadError` (`null` when the model was never pulled) —
+which is how the Models page can put a Retry button on the card itself instead of
+sending you to the Transfers list. `catalog_facets` returns the distinct values behind those dropdowns,
 with counts, derived from the loaded catalog including any local overlay.
 
 `start_chat_stream` loads the model on demand, so the chat page can send to a
@@ -144,7 +148,7 @@ Long operations report through events instead of holding a command open.
 | `chat-token` | `{ requestId, token }` | Every generated token |
 | `chat-done` | `{ requestId, text, finishReason, usage, elapsedMs, tokensPerSecond, simulated }` | End of a stream |
 | `chat-error` | `{ requestId, code, message, detail }` | Failed stream, including benchmarks |
-| `download-progress` | `{ downloadId, modelId, fileName, state, downloadedBytes, totalBytes, percent, bytesPerSecond }` | Throttled during transfer |
+| `download-progress` | `{ downloadId, modelId, fileName, state, downloadedBytes, totalBytes, percent, bytesPerSecond, attempt, maxAttempts, error }` | Throttled during transfer |
 | `download-complete` / `download-error` / `download-cancelled` | task summary | Terminal states |
 | `server-log` | `{ timestampMs, level, message }` | Each request the server handles |
 | `server-state` | `"started"` or `"stopped"` | The server changed state |
@@ -154,6 +158,11 @@ Long operations report through events instead of holding a command open.
 
 `requestId` is the correlation key: the UI ignores tokens from a request it has
 already finished or replaced, which is what makes Stop and retry safe.
+
+`state` in a download payload is one of `queued`, `running`, `retrying`,
+`verifying`, `complete`, `cancelled`, `failed`. `retrying` means a transient
+network error and an automatic second attempt — `error` carries the reason and
+`attempt`/`maxAttempts` the count — so it is still active work, not a failure.
 
 ---
 

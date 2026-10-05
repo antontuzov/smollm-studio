@@ -4,7 +4,7 @@ import { Ban, RotateCw } from "lucide-react";
 import { cancelDownload, retryDownload } from "@/lib/actions";
 import { formatBytes, formatDuration, formatPercent } from "@/lib/format";
 import { downloadStateLabel, downloadStateTone } from "@/lib/presentation";
-import { selectActiveTasks, useDownloads } from "@/stores/engine";
+import { isMoving, isRetryable, selectActiveTasks, useDownloads } from "@/stores/engine";
 import { StatusPill } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState, Progress } from "@/components/ui/feedback";
@@ -14,10 +14,6 @@ import type { DownloadProgress, DownloadTask } from "@/lib/types";
 
 const MAX_FINISHED = 6;
 
-function isMoving(task: DownloadTask): boolean {
-  return task.state === "queued" || task.state === "running" || task.state === "verifying";
-}
-
 /** Transfers, live first. Used on the Library and Home pages. */
 export function DownloadList({ className }: { className?: string }) {
   const tasks = useDownloads((state) => state.tasks);
@@ -26,7 +22,7 @@ export function DownloadList({ className }: { className?: string }) {
   const rows = useMemo(() => {
     const active = selectActiveTasks(tasks);
     const finished = Object.values(tasks)
-      .filter((task) => !isMoving(task))
+      .filter((task) => !isMoving(task.state))
       .sort((left, right) => (right.finishedMs ?? 0) - (left.finishedMs ?? 0))
       .slice(0, MAX_FINISHED);
     return [...active, ...finished];
@@ -56,7 +52,7 @@ function TransferRow({ task, progress }: { task: DownloadTask; progress?: Downlo
   const downloaded = progress?.downloadedBytes ?? task.downloadedBytes;
   const rate = progress?.bytesPerSecond ?? task.bytesPerSecond;
   const total = task.totalBytes ?? progress?.totalBytes ?? null;
-  const moving = isMoving(task);
+  const moving = isMoving(task.state);
   const elapsed =
     task.finishedMs !== null && task.finishedMs > task.startedMs
       ? task.finishedMs - task.startedMs
@@ -87,7 +83,7 @@ function TransferRow({ task, progress }: { task: DownloadTask; progress?: Downlo
           {elapsed !== null ? ` · ${formatDuration(elapsed)}` : ""}
         </span>
         <span className="flex items-center gap-2">
-          {task.state === "failed" || task.state === "cancelled" ? (
+          {isRetryable(task.state) ? (
             <Button variant="outline" size="sm" onClick={() => void retryDownload(task.id)}>
               <RotateCw />
               Retry
@@ -103,7 +99,15 @@ function TransferRow({ task, progress }: { task: DownloadTask; progress?: Downlo
       </div>
 
       {task.error ? (
-        <p className="rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-1.5 text-[11px] leading-relaxed text-destructive">
+        // An automatic retry is not a failure, so it must not read like one.
+        <p
+          className={cn(
+            "rounded-md border px-2.5 py-1.5 text-[11px] leading-relaxed",
+            task.state === "retrying"
+              ? "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+              : "border-destructive/30 bg-destructive/10 text-destructive",
+          )}
+        >
           {task.error}
         </p>
       ) : null}

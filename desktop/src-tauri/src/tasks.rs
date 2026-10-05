@@ -13,7 +13,7 @@ use smollm_core::AppError;
 use smollm_engine::TokenStream;
 use smollm_models::download::DownloadEvent;
 use smollm_server::SharedState;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::mpsc;
 
 use crate::events::{
@@ -102,9 +102,17 @@ pub(crate) fn pump_tokens(
 }
 
 /// Relay download progress to the frontend using the enum's own event names.
+///
+/// A finished file is also published to the local server immediately, so the
+/// model is servable without restarting it.
 pub(crate) fn pump_downloads(app: AppHandle, mut receiver: mpsc::UnboundedReceiver<DownloadEvent>) {
     tauri::async_runtime::spawn(async move {
         while let Some(event) = receiver.recv().await {
+            if matches!(event, DownloadEvent::Completed(_)) {
+                if let Some(state) = app.try_state::<Arc<crate::state::AppState>>() {
+                    crate::commands::refresh_advertised(&app, &state);
+                }
+            }
             emit_download(&app, &event);
         }
     });

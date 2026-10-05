@@ -24,6 +24,61 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   architecture and downloaded-or-not, on top of the existing search, sort and
   hide-unverified switch. The dropdown options come from a new `catalog_facets`
   command, so a `catalog.local.json` overlay extends them automatically.
+- **Automatic retry with backoff.** A dropped connection, timeout, `429` or
+  `5xx` is retried up to four times, honouring `Retry-After` when the server
+  sends it, and shows as a new `retrying` state — amber *attempt 2 of 4* prose
+  rather than a red failure. Cancel still works while a task waits between
+  attempts. The CLI reports the same attempts through its progress stream.
+- **Retry on the model card.** A failed or cancelled download now shows its
+  reason and a **Retry download** button on the Models page card, with the
+  percentage already on disk, rather than silently reverting to a plain Download
+  button and sending you to find the Transfers list. `list_catalog_models`
+  entries carry `downloadState` and `downloadError` (the newest transfer for that
+  model), and the card's status pill reports the real state, so a task in backoff
+  reads *retrying* instead of *running*.
+- **Download-engine tests over a real socket.** Nine of them run against a
+  loopback HTTP server that can drop connections, ignore `Range`, re-upload under
+  a new `ETag`, serve a non-GGUF body and gate the repo: resume continuity,
+  restart-on-`200`, provenance mismatch, header and checksum validation, joining
+  an in-flight transfer and the retry state. `HfClient` gained a private
+  `endpoint` so the whole path is testable without touching the internet.
+
+### Fixed
+
+- **A resume could not produce a corrupt model any more.** The old transfer sent
+  a `Range` header and then appended whatever came back. A server that ignores
+  `Range` and answers `200` with the whole file would therefore be written onto
+  the end of the partial, doubling its length with a duplicated head. The resume
+  path now only appends on a `206` whose `Content-Range` starts exactly at the
+  local offset; anything else discards the partial and re-downloads, and a
+  `Content-Range` that disagrees is treated as a transient server fault.
+- **Partial files carry provenance.** Each `.part` writes a
+  `<name>.gguf.part.meta.json` sidecar with the source URL and `ETag`. If the
+  remote file is re-uploaded, the revision moves, or the URL redirects elsewhere,
+  the stale bytes are discarded instead of being spliced onto the new stream.
+- **Resumed downloads verified the wrong checksum.** The SHA-256 was computed
+  over the bytes of the last attempt only, so a file resumed after one dropped
+  connection could never match its digest and was deleted. The digest is now read
+  from the finished file on disk.
+- **Non-GGUF responses no longer enter the library.** A login page or error
+  document served with a `200` and a plausible length used to be renamed into
+  place and listed as a model. The completed file's GGUF header is parsed before
+  publishing, so the task fails with `gguf_parse` and the partial is removed.
+- **Authoritative sizes instead of catalog guesses.** The transfer now asks the
+  Hugging Face file-metadata endpoint for the real byte length and digest before
+  downloading, which makes the percentage, the speed and the size check honest,
+  and detects a truncated stream that ends at a round number. If that endpoint is
+  unreachable, the download proceeds on the catalog's estimate rather than
+  failing outright.
+- **A completed download is immediately servable.** The download event pump
+  refreshes the local server's advertised model list on completion, so a fresh
+  model appears in `/v1/models` without restarting the server.
+- **The last write buffer is no longer lost on a failed attempt.** Flushing now
+  happens before the error propagates, so a resume restarts at the true offset
+  instead of up to 64 KiB earlier, and the file is fsynced before the rename into
+  the library.
+- `HfClient::probe` returned the metadata endpoint as the download URL; it now
+  returns the file URL and keeps the metadata URL internal.
 
 ## [0.1.0] - 2026-10-04
 

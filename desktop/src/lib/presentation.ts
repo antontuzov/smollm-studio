@@ -29,6 +29,7 @@ export function ratingTone(rating: Rating): BadgeTone {
 const downloadStateTones: Record<DownloadState, BadgeTone> = {
   queued: "neutral",
   running: "info",
+  retrying: "warning",
   verifying: "primary",
   complete: "success",
   cancelled: "warning",

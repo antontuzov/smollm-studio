@@ -67,16 +67,55 @@ hidden.
 
 ## Downloads
 
-- Resumable: bytes go to `<name>.gguf.part` and continue from the existing
-  offset with a `Range` request.
-- Size-checked: the finished length must match the advertised total.
-- SHA-256-checked when a digest is available; the state machine shows a distinct
-  *Verifying checksum* step. A mismatch fails the task, it does not silently
-  keep the file.
-- Cancellable from the card or the sidebar, and retryable from the Transfers
-  list.
-- Disk is checked before the first byte: if the estimate does not fit with room
-  to spare, you get `insufficient_disk_space` rather than a full volume.
+A transfer is a small state machine: *queued → running → (retrying)* →
+*verifying → complete*, and it can end in *failed* or *cancelled*.
+
+**Resume.** Bytes are written to `<name>.gguf.part`, so an interrupted file is
+never lost. The next attempt asks the server for the missing tail with a `Range`
+request and only accepts the reply if the response is `206` and its
+`Content-Range` starts exactly where the partial ends. A server that answers
+`200` instead is treated as unable to resume: the partial is discarded and the
+file is written from scratch, because splicing a full body onto a tail would
+produce a corrupt model.
+
+Each partial also writes a sidecar, `<name>.gguf.part.meta.json`, recording the
+URL and the file `ETag` it came from. If either changed — a re-uploaded export, a
+different revision, a redirect to another mirror — the old bytes are dropped
+rather than stitched onto the new stream. A partial without a sidecar (written by
+an older build) is kept, since the size, GGUF header and checksum checks below
+still have to pass before the file is published.
+
+**Validation before the file is trusted.** In order: the on-disk length must
+match the advertised total; the first bytes must parse as a real GGUF header with
+a sane tensor count (this is what rejects an HTML error page that was served with
+a `200`); the SHA-256 must match when a digest is available. Only then is the
+`.part` fsynced and renamed into place, and only then does it appear in the local
+library — and, if the local server is running, in `/v1/models` without a restart.
+A failed check deletes the partial; a half-written model never enters the
+library.
+
+**Network errors.** Transient failures — a dropped connection, `429`, `5xx`, an
+unparseable `Content-Range`, a `416` the server should not have sent — are retried
+automatically up to four times with capped backoff, and honour `Retry-After` when
+the server sends it. The Transfers row shows *retrying (attempt 2 of 4)* in amber
+instead of pretending the download died; cancel still works while the task waits
+between attempts. Authoritative sizes and digests come from the Hugging Face file
+metadata endpoint; if that endpoint is unreachable, the download continues with
+the catalog's own estimate and the size check becomes best-effort, so an API
+outage does not make the app useless offline. Consent-gated repos fail with a
+message that says to accept the licence rather than a bare `401`.
+
+**Cancel, retry, disk.** Cancel is cooperative: the transfer loop checks a flag
+between chunks, keeps the partial, and emits *cancelled*. Retry re-enters the
+same path, so it resumes where it left off — and it is offered in both places a
+failure is visible: the **Retry download** button on the model card and the
+**Retry** button in the Transfers list. Free space is checked before the first
+byte, with 64 MB of headroom, so you get `insufficient_disk_space` rather than a
+full volume.
+
+Progress events are throttled to about five per second and carry bytes, total,
+percentage and the rolling speed, which is what the Transfers sidebar renders as
+`MB / MB · % · MB/s`.
 
 `smollm models pull <id>` uses the identical code path.
 

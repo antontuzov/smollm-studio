@@ -10,6 +10,7 @@ import { create } from "zustand";
 import type { DownloadUpdate } from "@/lib/api";
 import type {
   DownloadProgress,
+  DownloadState,
   DownloadTask,
   EngineMetrics,
   LoadModelResponse,
@@ -81,11 +82,19 @@ export const useDownloads = create<DownloadsState>((set) => ({
   },
 }));
 
+/** True while a transfer may still be moving bytes, including an auto-retry. */
+export function isMoving(state: DownloadState): boolean {
+  return state === "queued" || state === "running" || state === "retrying" || state === "verifying";
+}
+
+/** Stopped without a file, so a Retry button can pick the partial back up. */
+export function isRetryable(state: DownloadState): boolean {
+  return state === "failed" || state === "cancelled";
+}
+
 /** Transfers still moving, newest first. */
 export function selectActiveTasks(tasks: Record<string, DownloadTask>): DownloadTask[] {
   return Object.values(tasks)
-    .filter(
-      (task) => task.state === "queued" || task.state === "running" || task.state === "verifying",
-    )
+    .filter((task) => isMoving(task.state))
     .sort((left, right) => right.startedMs - left.startedMs);
 }

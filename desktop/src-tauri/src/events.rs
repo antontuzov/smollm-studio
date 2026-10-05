@@ -143,10 +143,13 @@ mod tests {
             percent: 50.0,
             bytes_per_second: 1024.0,
             error: None,
+            attempt: 2,
+            max_attempts: 4,
         });
         let json = serde_json::to_value(&event).expect("serialisable");
         assert_eq!(json["event"], "download-progress");
         assert_eq!(json["payload"]["downloadId"], "d1");
         assert_eq!(json["payload"]["state"], "running");
+        assert_eq!(json["payload"]["maxAttempts"], 4);
     }
 }
