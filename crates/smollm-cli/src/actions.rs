@@ -193,6 +193,7 @@ pub fn list_catalog(
         quantization: None,
         tag: None,
         license: None,
+        architecture: None,
         hide_placeholders: !include_placeholders,
         sort: match sort {
             "smallest" => SortKey::Smallest,

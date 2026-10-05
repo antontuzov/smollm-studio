@@ -42,9 +42,47 @@ pub struct CatalogFilters {
     pub quantization: Option<String>,
     pub tag: Option<String>,
     pub license: Option<String>,
+    /// GGUF architecture, e.g. `llama` or `qwen2`.
+    pub architecture: Option<String>,
     /// Hide entries whose Hugging Face coordinates are unconfirmed.
     pub hide_placeholders: bool,
     pub sort: SortKey,
+}
+
+/// One selectable value in a filter dropdown, with how many entries offer it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FacetValue {
+    pub value: String,
+    pub count: usize,
+}
+
+/// Everything the Models page needs to build its filter controls, derived from
+/// the loaded catalog so a `catalog.local.json` overlay extends the options too.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogFacets {
+    pub quantizations: Vec<FacetValue>,
+    pub tags: Vec<FacetValue>,
+    pub licenses: Vec<FacetValue>,
+    pub architectures: Vec<FacetValue>,
+    /// Largest `parametersB` in the catalog; the UI builds its size bands from
+    /// this rather than hardcoding a ceiling.
+    pub max_parameters_b: f32,
+}
+
+fn counted(values: impl Iterator<Item = String>) -> Vec<FacetValue> {
+    let mut tally: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for value in values {
+        *tally.entry(value).or_default() += 1;
+    }
+    let mut facets: Vec<FacetValue> = tally
+        .into_iter()
+        .map(|(value, count)| FacetValue { value, count })
+        .collect();
+    // Most useful first, alphabetically when counts tie.
+    facets.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.value.cmp(&b.value)));
+    facets
 }
 
 #[derive(Debug, Clone)]
@@ -132,6 +170,21 @@ impl ModelCatalog {
             .collect()
     }
 
+    /// Distinct values for the Models page filters, with entry counts.
+    pub fn facets(&self) -> CatalogFacets {
+        CatalogFacets {
+            quantizations: counted(self.models.iter().map(|model| model.quantization.clone())),
+            tags: counted(self.models.iter().flat_map(|model| model.tags.clone())),
+            licenses: counted(self.models.iter().map(|model| model.license.clone())),
+            architectures: counted(self.models.iter().map(|model| model.architecture.clone())),
+            max_parameters_b: self
+                .models
+                .iter()
+                .map(|model| model.parameters_b)
+                .fold(0.0f32, f32::max),
+        }
+    }
+
     pub fn filter(&self, filters: &CatalogFilters) -> Vec<ModelDescriptor> {
         let query = filters.query.trim().to_lowercase();
         let mut results: Vec<ModelDescriptor> = self
@@ -167,6 +220,11 @@ impl ModelCatalog {
                 }
                 if let Some(license) = filters.license.as_deref() {
                     if !model.license.eq_ignore_ascii_case(license) {
+                        return false;
+                    }
+                }
+                if let Some(architecture) = filters.architecture.as_deref() {
+                    if !model.architecture.eq_ignore_ascii_case(architecture) {
                         return false;
                     }
                 }
@@ -262,6 +320,9 @@ impl ModelCatalog {
             if model.description.trim().is_empty() {
                 problems.push(format!("{}: missing description", model.id));
             }
+            if model.architecture.trim().is_empty() {
+                problems.push(format!("{}: missing architecture", model.id));
+            }
             let url = model.download_url();
             if !url.starts_with("https://huggingface.co/") || url.contains(" ") {
                 problems.push(format!("{}: bad download URL {url}", model.id));
@@ -344,13 +405,20 @@ mod tests {
     #[test]
     fn embedded_catalog_covers_the_small_model_bands() {
         let catalog = ModelCatalog::embedded();
-        for band in [0.5f32, 1.0, 1.7, 3.0, 4.0] {
+        // The same buckets the Models page offers as size bands.
+        for (label, min, max) in [
+            ("under 1B", 0.0f32, 1.0),
+            ("1-2B", 1.0, 2.0),
+            ("2-3B", 2.0, 3.0),
+            ("3-4B", 3.0, 4.0),
+            ("4B and up", 4.0, 100.0),
+        ] {
             assert!(
                 catalog
                     .models()
                     .iter()
-                    .any(|model| (model.parameters_b - band).abs() <= 0.35),
-                "no catalog entry near {band}B parameters"
+                    .any(|model| model.parameters_b >= min && model.parameters_b < max),
+                "no catalog entry in the {label} band"
             );
         }
         assert!(catalog.models().iter().all(ModelDescriptor::is_small));
@@ -367,6 +435,77 @@ mod tests {
         assert!(problems
             .iter()
             .any(|problem| problem.contains("contextLength")));
+        assert!(problems
+            .iter()
+            .any(|problem| problem.contains("missing architecture")));
+    }
+
+    #[test]
+    fn filters_by_architecture_license_and_size_band() {
+        let catalog = ModelCatalog::embedded();
+
+        let qwen = catalog.filter(&CatalogFilters {
+            architecture: Some("qwen2".to_string()),
+            ..Default::default()
+        });
+        assert!(!qwen.is_empty());
+        assert!(qwen.iter().all(|model| model.architecture == "qwen2"));
+
+        let apache = catalog.filter(&CatalogFilters {
+            license: Some("apache-2.0".to_string()),
+            ..Default::default()
+        });
+        assert!(!apache.is_empty());
+        assert!(apache.iter().all(|model| model.license == "apache-2.0"));
+
+        let band = catalog.filter(&CatalogFilters {
+            min_parameters_b: Some(2.0),
+            max_parameters_b: Some(2.99),
+            ..Default::default()
+        });
+        assert!(!band.is_empty(), "the 2B band needs at least one entry");
+        assert!(band
+            .iter()
+            .all(|model| model.parameters_b >= 2.0 && model.parameters_b < 3.0));
+
+        // Filters compose: an empty intersection is a real answer, not a bug.
+        let nonsense = catalog.filter(&CatalogFilters {
+            architecture: Some("qwen2".to_string()),
+            license: Some("llama3.2".to_string()),
+            ..Default::default()
+        });
+        assert!(nonsense.is_empty());
+    }
+
+    #[test]
+    fn facets_list_every_filterable_value_with_counts() {
+        let catalog = ModelCatalog::embedded();
+        let facets = catalog.facets();
+
+        assert_eq!(
+            facets
+                .architectures
+                .iter()
+                .map(|facet| facet.count)
+                .sum::<usize>(),
+            catalog.models().len()
+        );
+        assert!(facets
+            .architectures
+            .iter()
+            .any(|facet| facet.value == "granite"));
+        assert!(facets
+            .quantizations
+            .iter()
+            .any(|facet| facet.value == "Q4_K_M"));
+        assert!(facets.tags.iter().any(|facet| facet.value == "reasoning"));
+        assert!(!facets.licenses.is_empty());
+        // Sorted by count descending, so the widest options come first.
+        assert!(facets
+            .tags
+            .windows(2)
+            .all(|pair| pair[0].count >= pair[1].count));
+        assert!(facets.max_parameters_b >= 4.0);
     }
 
     #[test]

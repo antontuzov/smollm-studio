@@ -71,6 +71,8 @@ export interface ModelDescriptor {
   vision: boolean;
   license: string;
   family: ModelFamily;
+  /** GGUF `general.architecture`; decides which engine can load the file. */
+  architecture: string;
   tags: string[];
   recommendedRamGb: number;
   quality: Rating;
@@ -80,6 +82,37 @@ export interface ModelDescriptor {
 }
 
 /** A catalog entry enriched with library and memory facts. */
+/** One option in a Models page filter dropdown, with how many entries offer it. */
+export interface FacetValue {
+  value: string;
+  count: number;
+}
+
+/** Filter option lists derived from the loaded catalog, so overlays widen them. */
+export interface CatalogFacets {
+  quantizations: FacetValue[];
+  tags: FacetValue[];
+  licenses: FacetValue[];
+  architectures: FacetValue[];
+  maxParametersB: number;
+}
+
+/** Everything the Models page filter bar can constrain. */
+export interface CatalogFilterInput {
+  query: string;
+  sort: string;
+  /** Parameter-count band edges in billions; `undefined` means unbounded. */
+  minParametersB?: number;
+  maxParametersB?: number;
+  quantization?: string;
+  tag?: string;
+  license?: string;
+  architecture?: string;
+  /** `true` = only downloaded, `false` = only not downloaded, `undefined` = both. */
+  downloaded?: boolean;
+  hidePlaceholders: boolean;
+}
+
 export interface CatalogEntry extends ModelDescriptor {
   downloaded: boolean;
   estimatedRamGb: number;

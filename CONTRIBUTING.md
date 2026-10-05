@@ -95,7 +95,7 @@ These are not style preferences; they are the product's guarantees.
   Start here for any inference work.
 - `crates/smollm-models` — catalog schema and the download manager.
 - `desktop/src-tauri/src/commands.rs` — the command surface;
-  `docs/api.md` lists all 29 with their events.
+  `docs/api.md` lists all 30 with their events.
 - `desktop/src/lib/api.ts` — the single place the frontend crosses into Rust.
   Keep the TS types mirroring the Rust structs.
 

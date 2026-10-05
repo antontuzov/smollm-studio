@@ -12,6 +12,8 @@ pub enum ModelFamily {
     SmolLm2,
     Phi3,
     Gemma,
+    /// IBM Granite 3.x: a Harmony-style template, not ChatML.
+    Granite,
     #[default]
     Other,
 }
@@ -24,6 +26,7 @@ impl ModelFamily {
             Self::SmolLm2 => "SmolLM2",
             Self::Phi3 => "Phi-3",
             Self::Gemma => "Gemma",
+            Self::Granite => "Granite",
             Self::Other => "GGUF",
         }
     }
@@ -34,7 +37,9 @@ impl ModelFamily {
     /// [`ModelFamily::Other`], whose template is the safest ChatML-lite shape.
     pub fn from_hint(hint: &str) -> Self {
         let lower = hint.to_ascii_lowercase();
-        if lower.contains("qwen") {
+        if lower.contains("granite") {
+            Self::Granite
+        } else if lower.contains("qwen") {
             Self::Qwen2
         } else if lower.contains("smollm") {
             Self::SmolLm2
@@ -63,6 +68,9 @@ impl ModelFamily {
                 out.push_str(&format!("<{role_tag}>\n{content}\n</{role_tag}>\n"));
             }
             Self::Phi3 => out.push_str(&format!("{role_tag}\n{content}\n")),
+            Self::Granite => out.push_str(&format!(
+                "<|start_of_role|>{role_tag}<|end_of_role|>{content}<|end_of_text|>\n"
+            )),
             Self::Gemma => out.push_str(&format!(
                 "<start_of_turn>{role_tag}\n{content}<end_of_turn>\n"
             )),
@@ -83,6 +91,7 @@ impl ModelFamily {
         match self {
             Self::Phi3 => out.push_str("assistant\n"),
             Self::Gemma => out.push_str("<start_of_turn>model\n"),
+            Self::Granite => out.push_str("<|start_of_role|>assistant<|end_of_role|>\n"),
             _ => out.push_str("<assistant>\n"),
         }
         out
@@ -128,6 +137,9 @@ pub struct ModelDescriptor {
     pub vision: bool,
     pub license: String,
     pub family: ModelFamily,
+    /// GGUF `general.architecture` (`llama`, `qwen2`, `gemma3`, `phi3`,
+    /// `granite`). This is what decides whether an engine can load the file.
+    pub architecture: String,
     pub tags: Vec<String>,
     pub recommended_ram_gb: f32,
     pub quality: Rating,
@@ -151,6 +163,7 @@ impl Default for ModelDescriptor {
             vision: false,
             license: "unknown".to_string(),
             family: ModelFamily::default(),
+            architecture: String::new(),
             tags: Vec::new(),
             recommended_ram_gb: 4.0,
             quality: Rating::default(),
@@ -280,6 +293,12 @@ mod tests {
         let gemma = ModelFamily::Gemma.render_prompt(None, &messages);
         assert!(gemma.contains("<start_of_turn>user\nhi<end_of_turn>"));
         assert!(gemma.ends_with("<start_of_turn>model\n"));
+
+        // Markers copied from the chat_template embedded in Granite's own GGUF.
+        let granite = ModelFamily::Granite.render_prompt(None, &messages);
+        assert!(granite.contains("<|start_of_role|>user<|end_of_role|>hi<|end_of_text|>"));
+        assert!(granite.ends_with("<|start_of_role|>assistant<|end_of_role|>\n"));
+        assert_eq!(ModelFamily::from_hint("granite"), ModelFamily::Granite);
     }
 
     #[test]

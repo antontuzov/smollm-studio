@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use smollm_core::chat::{
     approx_token_count, ChatRequest, EngineMetrics, LoadModelOptions, LoadModelRequest,
     LoadModelResponse, SamplingParams,
@@ -25,7 +25,7 @@ use smollm_core::system::{
 use smollm_core::{AppError, AppResult};
 use smollm_engine::benchmark::{self, BenchmarkConfig, BenchmarkProgress, BenchmarkResult};
 use smollm_engine::{EngineManager, TokenStream};
-use smollm_models::catalog::{CatalogFilters, SortKey};
+use smollm_models::catalog::{CatalogFacets, CatalogFilters, SortKey};
 use smollm_models::download::{DownloadState, DownloadTask};
 use smollm_server::{self as server, ServerState, SharedState};
 use tauri::{AppHandle, Emitter, State};
@@ -157,27 +157,70 @@ pub async fn get_doctor_report(state: Shared<'_>) -> AppResult<DoctorReport> {
 // catalog, library, downloads
 // ---------------------------------------------------------------------------
 
+/// The Models page filter bar, as one argument so the command surface stays
+/// narrow. Every field is optional; an empty string means "no constraint".
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CatalogQuery {
+    pub query: Option<String>,
+    pub sort: Option<String>,
+    pub min_parameters_b: Option<f32>,
+    pub max_parameters_b: Option<f32>,
+    pub quantization: Option<String>,
+    pub tag: Option<String>,
+    pub license: Option<String>,
+    pub architecture: Option<String>,
+    pub hide_placeholders: Option<bool>,
+}
+
+impl CatalogQuery {
+    fn into_filters(self) -> CatalogFilters {
+        let CatalogQuery {
+            query,
+            sort,
+            min_parameters_b,
+            max_parameters_b,
+            quantization,
+            tag,
+            license,
+            architecture,
+            hide_placeholders,
+        } = self;
+        CatalogFilters {
+            query: query.unwrap_or_default(),
+            min_parameters_b,
+            max_parameters_b,
+            quantization: optional(quantization),
+            tag: optional(tag),
+            license: optional(license),
+            architecture: optional(architecture),
+            hide_placeholders: hide_placeholders.unwrap_or(true),
+            sort: parse_sort(sort.as_deref()),
+        }
+    }
+}
+
+/// An empty or whitespace-only filter value means "any", not "match nothing".
+fn optional(value: Option<String>) -> Option<String> {
+    let value = value?.trim().to_string();
+    (!value.is_empty()).then_some(value)
+}
+
 #[tauri::command]
 pub async fn list_catalog_models(
     state: Shared<'_>,
-    query: Option<String>,
-    sort: Option<String>,
-    max_parameters_b: Option<f32>,
-    hide_placeholders: Option<bool>,
+    filters: Option<CatalogQuery>,
+    // `Some(true)` = only what is on disk, `Some(false)` = only what is not.
+    downloaded: Option<bool>,
 ) -> AppResult<Vec<CatalogEntry>> {
-    let filters = CatalogFilters {
-        query: query.unwrap_or_default(),
-        max_parameters_b,
-        hide_placeholders: hide_placeholders.unwrap_or(true),
-        sort: parse_sort(sort.as_deref()),
-        ..CatalogFilters::default()
-    };
+    // No filter bar at all still means "hide unverified ids".
+    let filters = filters.unwrap_or_default().into_filters();
     let state = Arc::clone(&state);
     let hardware = state.cached_hardware();
     run_blocking(move || {
         let models = state.catalog.filter(&filters);
         let library = state.library();
-        let downloaded: Vec<String> = library
+        let on_disk: Vec<String> = library
             .scan(&state.catalog)
             .unwrap_or_default()
             .into_iter()
@@ -191,13 +234,13 @@ pub async fn list_catalog_models(
             .as_ref()
             .map_or(f64::INFINITY, |report| report.available_ram_gb * 0.8);
 
-        models
+        let mut entries: Vec<CatalogEntry> = models
             .into_iter()
             .map(|model| {
                 let task = tasks.iter().find(|task| task.model_id == model.id);
                 let estimated = model.estimated_ram_gb(model.context_length);
                 CatalogEntry {
-                    downloaded: downloaded.contains(&model.id),
+                    downloaded: on_disk.contains(&model.id),
                     estimated_ram_gb: estimated,
                     fits_memory: estimated <= usable_ram,
                     downloading: task.is_some_and(|task| {
@@ -212,9 +255,23 @@ pub async fn list_catalog_models(
                     model,
                 }
             })
-            .collect()
+            .collect();
+        // Whether an entry is on disk is only knowable here, next to the
+        // library scan, so this filter stays out of the catalog crate.
+        if let Some(wanted) = downloaded {
+            entries.retain(|entry| entry.downloaded == wanted);
+        }
+        entries
     })
     .await
+}
+
+/// Values behind the Models page filter controls, derived from the loaded
+/// catalog so a local overlay contributes its own tags and licenses.
+#[tauri::command]
+pub async fn catalog_facets(state: Shared<'_>) -> AppResult<CatalogFacets> {
+    let state = Arc::clone(&state);
+    run_blocking(move || state.catalog.facets()).await
 }
 
 fn parse_sort(value: Option<&str>) -> SortKey {
@@ -1031,12 +1088,71 @@ pub async fn export_diagnostics(app: AppHandle, state: Shared<'_>) -> AppResult<
 mod tests {
     use super::*;
 
+    // Only the serialization test constructs these directly.
+    use smollm_models::catalog::FacetValue;
+
     #[test]
     fn sort_labels_map_onto_catalog_keys() {
         assert_eq!(parse_sort(None), SortKey::Recommended);
         assert_eq!(parse_sort(Some("SMALLEST")), SortKey::Smallest);
         assert_eq!(parse_sort(Some("fastest")), SortKey::Fastest);
         assert_eq!(parse_sort(Some("nonsense")), SortKey::Recommended);
+    }
+
+    /// Pins the `filters` object shape that `desktop/src/lib/api.ts` sends, so
+    /// the two sides cannot drift without a test failing.
+    #[test]
+    fn catalog_query_accepts_the_frontend_shape() {
+        let value = serde_json::json!({
+            "query": "qwen",
+            "sort": "fastest",
+            "minParametersB": 1.0,
+            "maxParametersB": 3.0,
+            "quantization": "",
+            "tag": "chat",
+            "license": "apache-2.0",
+            "architecture": null,
+            "hidePlaceholders": true,
+        });
+        let filters: CatalogQuery = serde_json::from_value(value).expect("camelCase keys");
+        let filters = filters.into_filters();
+        assert_eq!(filters.query, "qwen");
+        assert_eq!(filters.sort, SortKey::Fastest);
+        assert_eq!(filters.min_parameters_b, Some(1.0));
+        assert_eq!(filters.max_parameters_b, Some(3.0));
+        assert_eq!(
+            filters.quantization, None,
+            "an untouched select means 'any', not 'match nothing'"
+        );
+        assert_eq!(filters.tag, Some("chat".to_string()));
+        assert_eq!(filters.architecture, None);
+        assert!(filters.hide_placeholders);
+
+        // No filter bar at all still means unverified ids stay hidden.
+        let bare: CatalogQuery = serde_json::from_str("{}").expect("every field optional");
+        assert!(bare.into_filters().hide_placeholders);
+    }
+
+    #[test]
+    fn facets_serialize_camel_case_for_the_ui() {
+        let facets = CatalogFacets {
+            quantizations: vec![FacetValue {
+                value: "Q4_K_M".to_string(),
+                count: 11,
+            }],
+            tags: Vec::new(),
+            licenses: Vec::new(),
+            architectures: vec![FacetValue {
+                value: "granite".to_string(),
+                count: 1,
+            }],
+            max_parameters_b: 4.0,
+        };
+        let json = serde_json::to_value(facets).expect("serialisable");
+        assert_eq!(json["quantizations"][0]["value"], "Q4_K_M");
+        assert_eq!(json["quantizations"][0]["count"], 11);
+        assert_eq!(json["maxParametersB"], 4.0);
+        assert_eq!(json["architectures"][0]["value"], "granite");
     }
 
     #[test]

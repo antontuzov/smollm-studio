@@ -160,10 +160,11 @@ Bundling needs the Tauri system prerequisites for your OS, described at
 
 ## Model support
 
-The bundled catalog holds 11 entries, all in the 0.36B–4B band, all Q4-class
-quantisations, and all `verified` — meaning the Hugging Face repository and file
-name were confirmed against the resolver. Entries you add through
-`catalog.local.json` are marked `placeholder` until verified.
+The bundled catalog holds 13 entries, from 0.36B to 4B parameters, all Q4-class
+quantisations, and all `verified` — meaning the Hugging Face repository, file
+name and GGUF architecture were confirmed against the resolver and the file's own
+header. Entries you add through `catalog.local.json` are marked `placeholder`
+until verified.
 
 | Model | Params | Download | Context | Notes |
 | --- | --- | --- | --- | --- |
@@ -174,10 +175,17 @@ name were confirmed against the resolver. Entries you add through
 | Qwen2.5 1.5B Instruct | 1.54B | 1.1 GB | 32K | Noticeably better reasoning |
 | DeepSeek R1 Distill Qwen 1.5B | 1.54B | 1.1 GB | 8K | Emits a reasoning trace before answering |
 | SmolLM2 1.7B Instruct | 1.71B | 1.1 GB | 8K | Balanced Hugging Face model |
+| MiniCPM5 2B | 2.52B | 1.6 GB | 8K | Llama-shaped, 2 KV heads, cheap long context |
+| Granite 3.1 2B Instruct | 2.53B | 1.5 GB | 8K | IBM's Harmony-style template |
 | Qwen2.5 3B Instruct | 3.1B | 2.1 GB | 32K | Approaches useful coding help |
 | Llama 3.2 3B Instruct | 3.2B | 2.0 GB | 131K | Strong instruction following |
 | Phi-3 Mini 4K Instruct | 3.8B | 2.4 GB | 4K | Dense reasoning for its size |
 | Gemma 3 4B IT (QAT) | 4.0B | 2.5 GB | 8K | The ceiling this app recommends |
+
+The Models page filters this list by parameter band, quantisation, tag, license,
+architecture and whether the file is already in your library. Every dropdown is
+built from the catalog itself, so an overlay entry contributes its own tags and
+licenses too.
 
 Any other GGUF file works too: drop it into the model folder (Settings shows the
 path, with a **Model folder** button) and it appears in the Library, parsed from
@@ -197,7 +205,7 @@ Weights are estimated as `file size + KV cache + ~350 MB of runtime`, and only
 | 16 GB | up to 3B–4B | Room for longer prompts and a second app |
 | 32 GB+ | 4B and beyond | This app still caps its advice at 4B on purpose |
 
-Disk: 5 GB free covers the whole catalog. GPU: not required. Apple Silicon and
+Disk: 5 GB free holds a normal working set of three or four models; downloading all 13 catalog entries is about 18 GB. GPU: not required. Apple Silicon and
 CUDA both help once a native backend is wired in; today the mock engine runs on
 CPU everywhere. Details in [docs/hardware.md](docs/hardware.md).
 
@@ -247,7 +255,7 @@ crates/
   smollm-cli        the `smollm` binary
 desktop/
   src/              React + TypeScript UI (8 pages)
-  src-tauri/        29 commands, event bridge, tray, bundling
+  src-tauri/        30 commands, event bridge, tray, bundling
 ```
 
 ## Roadmap

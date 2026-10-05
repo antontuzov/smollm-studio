@@ -18,10 +18,14 @@ Each entry carries the coordinates needed to resolve and verify a download:
 | `parametersB`, `sizeMb`, `quantization` | Drive the RAM estimate and the size filters |
 | `contextLength`, `recommendedRamGb` | What the card shows and what loading defaults to |
 | `family`, `tags`, `speed`, `quality`, `vision` | Sorting, badges and recommendations |
+| `architecture` | The GGUF header's `general.architecture` (`llama`, `qwen2`, `gemma3`, `phi3`, `granite`) — what an engine must support to load the file, and a Models page filter |
 | `license` | Shown on the card; these models have different terms |
 | `status` | `verified` or `placeholder` (see below) |
 
-Eleven entries ship, all between 0.36B and 4B parameters. The list in
+Thirteen entries ship, from 0.36B to 4B parameters, with at least one model in
+every band the Models page filters by: under 1B, 1–2B, 2–3B, 3–4B and 4B and up.
+`ModelCatalog::validate()` and the test suite hold that band coverage in place, so
+a future edit cannot quietly empty a band. The list in
 [the README](../README.md#model-support) is generated from the same file.
 
 ### `verified` versus `placeholder`
@@ -33,8 +37,19 @@ switch. Nothing is silently presented as certain when it is not.
 
 `ModelCatalog::validate()` enforces the invariants on every load: non-empty
 unique ids, `org/name` repositories, `.gguf` file names, parameter counts in
-0.1–200, plausible sizes, context ≥ 512, and a buildable download URL. Problems
+0.1–200, plausible sizes, context ≥ 512, a non-empty `architecture`, and a
+buildable download URL. Problems
 become warnings in diagnostics rather than a crash at startup.
+
+## Filters
+
+`ModelCatalog::filter()` applies search, parameter band, quantisation, tag,
+license and architecture. `ModelCatalog::facets()` reports the distinct values
+with entry counts, and the Models page builds every dropdown from it — so an
+overlay entry with a new license or tag appears in the UI without a code change.
+Whether a model is already downloaded is answered next to the library scan (in
+the `list_catalog_models` command), not in this crate, so the catalog stays a
+pure data structure.
 
 ## Overlays and your own models
 

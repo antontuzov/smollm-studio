@@ -67,8 +67,21 @@ export function ModelCard({
         <Fact label="Download" value={formatMegabytes(model.sizeMb)} />
         <Fact label="Context" value={`${model.contextLength} tokens`} />
         <Fact label="Needs RAM" value={`~${model.recommendedRamGb} GB`} />
-        <Fact label="Speed" value={`${model.speed} · ${model.tags.slice(0, 2).join(", ")}`} />
+        <Fact label="Speed" value={model.speed} />
+        <Fact label="Architecture" value={model.architecture} mono />
+        <Fact label="License" value={model.license} />
       </dl>
+
+      {model.tags.length > 0 || model.vision ? (
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {model.vision ? <Badge tone="primary">vision</Badge> : null}
+          {model.tags.map((tag) => (
+            <Badge key={tag} tone="neutral">
+              {tag}
+            </Badge>
+          ))}
+        </div>
+      ) : null}
 
       {!model.fitsMemory ? (
         <Note tone="warning" className="mt-3">
@@ -117,11 +130,13 @@ export function ModelCard({
   );
 }
 
-function Fact({ label, value }: { label: string; value: string }) {
+function Fact({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
   return (
     <div className="flex items-baseline justify-between gap-2 border-b border-dashed py-1">
       <dt className="text-muted-foreground">{label}</dt>
-      <dd className="truncate text-right font-medium tabular-nums">{value}</dd>
+      <dd className={cn("truncate text-right font-medium tabular-nums", mono && "font-mono")}>
+        {value}
+      </dd>
     </div>
   );
 }

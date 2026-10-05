@@ -15,6 +15,8 @@ import type {
   BenchmarkProgress,
   BenchmarkResult,
   CatalogEntry,
+  CatalogFacets,
+  CatalogFilterInput,
   ChatDoneEvent,
   ChatErrorEvent,
   ChatRequest,
@@ -74,18 +76,24 @@ export const api = {
   getAppInfo: () => call<AppInfo>("get_app_info"),
   getDoctorReport: () => call<DoctorReport>("get_doctor_report"),
 
-  listCatalogModels: (input: {
-    query?: string;
-    sort?: string;
-    maxParametersB?: number;
-    hidePlaceholders?: boolean;
-  }) =>
+  listCatalogModels: (input: CatalogFilterInput) =>
     call<CatalogEntry[]>("list_catalog_models", {
-      query: input.query,
-      sort: input.sort,
-      maxParametersB: input.maxParametersB,
-      hidePlaceholders: input.hidePlaceholders,
+      filters: {
+        query: input.query,
+        sort: input.sort,
+        minParametersB: input.minParametersB ?? null,
+        maxParametersB: input.maxParametersB ?? null,
+        quantization: input.quantization ?? null,
+        tag: input.tag ?? null,
+        license: input.license ?? null,
+        architecture: input.architecture ?? null,
+        hidePlaceholders: input.hidePlaceholders,
+      },
+      // `null` means "both downloaded and not" so the command can tell the
+      // three states apart.
+      downloaded: input.downloaded === undefined ? null : input.downloaded,
     }),
+  catalogFacets: () => call<CatalogFacets>("catalog_facets"),
   listLocalModels: () => call<LocalModel[]>("list_local_models"),
   pullModel: (modelId: string) => call<DownloadTask>("pull_model", { modelId }),
   cancelDownload: (downloadId: string) =>

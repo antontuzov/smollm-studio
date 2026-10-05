@@ -107,14 +107,14 @@ they are never stale.
 
 ## Tauri commands
 
-29 commands, all `async`; filesystem and `sysinfo` work moves to the blocking
+30 commands, all `async`; filesystem and `sysinfo` work moves to the blocking
 pool so the main thread never stalls. Arguments are camelCase in JavaScript and
 snake_case in Rust. Every rejection serialises to `{ code, message, detail }`.
 
 | Area | Commands |
 | --- | --- |
 | Machine | `detect_hardware`, `get_app_info`, `get_doctor_report` |
-| Models | `list_catalog_models`, `list_local_models`, `pull_model`, `cancel_download`, `retry_download`, `get_download_snapshot`, `delete_local_model` |
+| Models | `list_catalog_models`, `catalog_facets`, `list_local_models`, `pull_model`, `cancel_download`, `retry_download`, `get_download_snapshot`, `delete_local_model` |
 | Engine | `load_model`, `unload_model`, `get_engine_metrics`, `get_presets` |
 | Chat | `start_chat_stream`, `stop_generation` |
 | Server | `start_server`, `stop_server`, `get_server_status`, `get_server_examples` |
@@ -122,6 +122,13 @@ snake_case in Rust. Every rejection serialises to `{ code, message, detail }`.
 | Logs | `get_logs`, `clear_logs` |
 | Settings | `get_settings`, `save_settings`, `reset_app_data`, `export_diagnostics` |
 | Files | `open_model_folder`, `open_log_folder` |
+
+`list_catalog_models` takes the whole filter bar as one `filters` object
+(`query`, `sort`, `minParametersB`, `maxParametersB`, `quantization`, `tag`,
+`license`, `architecture`, `hidePlaceholders`) plus `downloaded`, which is
+`true`, `false` or `null` for "both". Empty strings mean "any", not "match
+nothing". `catalog_facets` returns the distinct values behind those dropdowns,
+with counts, derived from the loaded catalog including any local overlay.
 
 `start_chat_stream` loads the model on demand, so the chat page can send to a
 model that was never explicitly loaded. `run_benchmark` uses its own engine

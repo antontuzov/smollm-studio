@@ -4,6 +4,27 @@ All notable changes to SmolLLM Studio are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Model catalog: the 2B band and an `architecture` field.** Two new entries —
+  MiniCPM5 2B and Granite 3.1 2B Instruct — fill the gap between 1.7B and 3B, so
+  every size band the Models page offers has at least one curated model. Each
+  entry now also carries `architecture`, read from the GGUF file's own header
+  rather than inferred from the repo name; the two new downloads, their byte
+  sizes, parameter counts and licenses were resolved against Hugging Face on
+  2026-10-05. `ModelCatalog::validate()` requires it and a test pins band
+  coverage.
+- **Granite prompt family.** `ModelFamily::Granite` renders IBM's Harmony-style
+  markers (`<|start_of_role|>…<|end_of_role|>…<|end_of_text|>`), copied from the
+  chat template embedded in the file. Previously a Granite GGUF would have been
+  prompted as generic ChatML.
+- **Models page filters**: parameter band, quantisation, tag, license,
+  architecture and downloaded-or-not, on top of the existing search, sort and
+  hide-unverified switch. The dropdown options come from a new `catalog_facets`
+  command, so a `catalog.local.json` overlay extends them automatically.
+
 ## [0.1.0] - 2026-10-04
 
 First release. It is a complete, working *application shell* for running small

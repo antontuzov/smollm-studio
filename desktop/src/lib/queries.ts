@@ -8,18 +8,15 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { api } from "./api";
-import type { CatalogEntry, HardwareReport } from "./types";
+import type { CatalogEntry, CatalogFilterInput, HardwareReport } from "./types";
 
 export const queryKeys = {
   hardware: ["hardware"] as const,
   appInfo: ["app-info"] as const,
   doctor: ["doctor"] as const,
-  catalog: (
-    query: string,
-    sort: string,
-    maxParametersB: number | undefined,
-    hidePlaceholders: boolean,
-  ) => ["catalog", { query, sort, maxParametersB: maxParametersB ?? null, hidePlaceholders }] as const,
+  catalog: (filters: CatalogFilterInput) =>
+    ["catalog", filters] as const,
+  catalogFacets: ["catalog-facets"] as const,
   localModels: ["local-models"] as const,
   downloads: ["downloads"] as const,
   engineMetrics: ["engine-metrics"] as const,
@@ -51,24 +48,21 @@ export function useDoctor() {
   return useQuery({ queryKey: queryKeys.doctor, queryFn: api.getDoctorReport, staleTime: 60_000 });
 }
 
-export interface CatalogFilterInput {
-  query: string;
-  sort: string;
-  /** `undefined` means "no size limit" and is omitted from the command. */
-  maxParametersB?: number;
-  hidePlaceholders: boolean;
-}
-
 export function useCatalog(input: CatalogFilterInput) {
   return useQuery({
-    queryKey: queryKeys.catalog(
-      input.query,
-      input.sort,
-      input.maxParametersB,
-      input.hidePlaceholders,
-    ),
+    // The whole filter object is the key, so any change refetches.
+    queryKey: queryKeys.catalog(input),
     queryFn: () => api.listCatalogModels(input),
     staleTime: 30_000,
+  });
+}
+
+/** Filter option lists; they only change when the catalog or an overlay does. */
+export function useCatalogFacets() {
+  return useQuery({
+    queryKey: queryKeys.catalogFacets,
+    queryFn: api.catalogFacets,
+    staleTime: Infinity,
   });
 }
 

@@ -97,6 +97,7 @@ export function SettingsPage() {
       // A new model directory changes what the library and the catalog can see.
       await queryClient.invalidateQueries({ queryKey: queryKeys.localModels });
       await queryClient.invalidateQueries({ queryKey: ["catalog"] });
+      await queryClient.invalidateQueries({ queryKey: ["catalog-facets"] });
     } catch (error) {
       setFailure(describeError(error));
     } finally {

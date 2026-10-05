@@ -82,6 +82,7 @@ pub fn run() {
             commands::get_app_info,
             commands::get_doctor_report,
             commands::list_catalog_models,
+            commands::catalog_facets,
             commands::list_local_models,
             commands::pull_model,
             commands::cancel_download,
