@@ -7,7 +7,9 @@ import type { ButtonHTMLAttributes } from "react";
 import type { VariantProps } from "class-variance-authority";
 
 export const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+  // Transform is in the transition list so the press offset reads as a nudge
+  // rather than a jump.
+  "inline-flex select-none items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-[background-color,border-color,color,box-shadow,transform] duration-150 active:translate-y-px motion-reduce:active:translate-y-0 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
   {
     variants: {
       variant: {
@@ -15,7 +17,7 @@ export const buttonVariants = cva(
         secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/70",
         outline: "border border-input bg-transparent hover:bg-secondary/60",
         ghost: "text-muted-foreground hover:bg-secondary/70 hover:text-foreground",
-        destructive: "bg-destructive text-destructive-foreground hover:bg-destructive/90",
+        destructive: "bg-destructive text-destructive-foreground shadow-soft hover:bg-destructive/90",
         accent: "bg-accent text-accent-foreground hover:bg-accent/90",
       },
       size: {

@@ -66,7 +66,7 @@ export function CopyButton({ text, label = "Copy", className }: CopyButtonProps)
         timer.current = window.setTimeout(() => setCopied(false), 1600);
       }}
     >
-      {copied ? <Check className="text-success" /> : <Copy />}
+      {copied ? <Check className="animate-pop-in text-success" /> : <Copy />}
     </Button>
   );
 }
@@ -82,7 +82,7 @@ interface CodeBlockProps {
 export function CodeBlock({ code, language, caption, className }: CodeBlockProps) {
   return (
     <figure className={cn("overflow-hidden rounded-lg border bg-background/70", className)}>
-      <figcaption className="flex items-center justify-between gap-2 border-b px-3 py-1.5">
+      <figcaption className="flex items-center justify-between gap-2 border-b bg-secondary/40 px-3 py-1.5">
         <span className="truncate font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
           {language ?? caption ?? "snippet"}
         </span>

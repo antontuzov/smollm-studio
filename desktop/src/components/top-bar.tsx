@@ -81,10 +81,13 @@ export function TopBar() {
           variant="ghost"
           size="icon-sm"
           aria-label={`Theme: ${theme}. Click to change.`}
-          title={`Theme: ${theme}`}
+          title={`Theme: ${theme} (click to cycle light, dark, system)`}
           onClick={() => setTheme(nextTheme(theme))}
         >
-          <Icon />
+          {/* Keyed by theme so each swap gets its own entrance. */}
+          <span key={theme} className="block animate-pop-in">
+            <Icon />
+          </span>
         </Button>
       </div>
     </header>

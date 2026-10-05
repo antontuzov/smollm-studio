@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { CirclePlay, Copy, Server, Square, Terminal } from "lucide-react";
+import { ArrowDown, CirclePlay, Copy, Server, Square, Terminal } from "lucide-react";
 
 import { startServer, stopServer } from "@/lib/actions";
 import { describeError, formatTime, formatUptime } from "@/lib/format";
+import { useStickToBottom } from "@/lib/use-stick-to-bottom";
 import { useCatalog, useServerExamples, useServerStatus, useSettingsQuery } from "@/lib/queries";
 import { levelTone } from "@/lib/presentation";
 import { useServerLog } from "@/stores/server-log";
@@ -25,6 +26,13 @@ export function ServerPage() {
   const handle = useEngine((state) => state.handle);
   const lines = useServerLog((state) => state.lines);
   const clearLines = useServerLog((state) => state.clear);
+  // The request log tails itself, unless you have scrolled up to read a line.
+  const {
+    ref: logRef,
+    pinned: logPinned,
+    trackScroll: trackLogScroll,
+    scrollToBottom: scrollLogToBottom,
+  } = useStickToBottom<HTMLUListElement>(lines[lines.length - 1]?.id ?? "empty");
 
   const [host, setHost] = useState("127.0.0.1");
   const [port, setPort] = useState(8080);
@@ -200,7 +208,7 @@ export function ServerPage() {
             </CardContent>
           </Card>
 
-          <Card>
+          <Card className="relative">
             <CardHeader
               title="Request log"
               description="Live lines from the HTTP server."
@@ -218,9 +226,16 @@ export function ServerPage() {
                   description="Call the endpoint with one of the examples and the method, path, model and token count land here."
                 />
               ) : (
-                <ul className="max-h-72 space-y-1 overflow-y-auto font-mono text-[11px]">
+                <ul
+                  ref={logRef}
+                  onScroll={trackLogScroll}
+                  className="max-h-72 space-y-1 overflow-y-auto font-mono text-[11px]"
+                >
                   {lines.map((line) => (
-                    <li key={line.id} className="flex items-start gap-2 rounded px-1 py-0.5 hover:bg-secondary/40">
+                    <li
+                      key={line.id}
+                      className="flex animate-rise-in items-start gap-2 rounded px-1 py-0.5 hover:bg-secondary/40"
+                    >
                       <span className="shrink-0 text-muted-foreground">{formatTime(line.timestampMs)}</span>
                       <Badge tone={levelTone(line.level)} className="shrink-0 uppercase">
                         {line.level}
@@ -229,6 +244,17 @@ export function ServerPage() {
                     </li>
                   ))}
                 </ul>
+              )}
+              {logPinned || lines.length === 0 ? null : (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="absolute bottom-3 left-1/2 -translate-x-1/2 animate-rise-in rounded-full shadow-panel"
+                  onClick={() => scrollLogToBottom(true)}
+                >
+                  <ArrowDown />
+                  Jump to latest
+                </Button>
               )}
             </CardContent>
           </Card>

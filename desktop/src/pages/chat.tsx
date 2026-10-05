@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowDown,
   Bot,
   Eraser,
   Gauge,
@@ -14,8 +15,9 @@ import {
 import { api } from "@/lib/api";
 import { loadModel } from "@/lib/actions";
 import { describeError, formatDuration, formatRate } from "@/lib/format";
+import { useStickToBottom } from "@/lib/use-stick-to-bottom";
 import { useCatalog, usePresets, useSettingsQuery } from "@/lib/queries";
-import { nextId } from "@/lib/utils";
+import { cn, nextId } from "@/lib/utils";
 import { useChat } from "@/stores/chat";
 import { useEngine } from "@/stores/engine";
 import { toast } from "@/stores/ui";
@@ -70,13 +72,33 @@ export function ChatPage() {
   const [modelId, setModelId] = useState(handle?.modelId ?? "");
   const [showParams, setShowParams] = useState(false);
 
-  const scrollArea = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
+  // Character count, not turn count: streamed tokens change the length of the
+  // last turn, and that is what should pull the transcript down.
+  const contentSize = turns.reduce((total, turn) => total + turn.content.length, 0);
+  // The transcript follows new tokens only while the reader is at the bottom;
+  // otherwise their scroll position is theirs.
+  const {
+    ref: transcriptRef,
+    pinned,
+    trackScroll,
+    scrollToBottom,
+  } = useStickToBottom<HTMLDivElement>(contentSize);
 
   const downloaded = useMemo(
     () => (catalog.data ?? []).filter((model) => model.downloaded),
     [catalog.data],
   );
+
+  // Only the newest answer can be regenerated; older ones are history.
+  const lastAssistantId = useMemo(() => {
+    for (let index = turns.length - 1; index >= 0; index -= 1) {
+      if (turns[index].role === "assistant") {
+        return turns[index].id;
+      }
+    }
+    return null;
+  }, [turns]);
 
   const modelOptions = useMemo(() => {
     const options = downloaded.map((model) => ({ value: model.id, label: model.displayName }));
@@ -102,13 +124,6 @@ export function ChatPage() {
       ?? presets.data[0];
     setPreset(wanted.name, wanted.params);
   }, [params, presets.data, settings.data, setPreset]);
-
-  useEffect(() => {
-    const area = scrollArea.current;
-    if (area) {
-      area.scrollTop = area.scrollHeight;
-    }
-  }, [turns]);
 
   const send = useCallback(
     async (text: string, history?: ChatMessage[]) => {
@@ -142,13 +157,14 @@ export function ChatPage() {
       };
       beginStream(trimmed, id, assistantId);
       setDraft("");
+      scrollToBottom();
       try {
         await api.startChatStream(request);
       } catch (error) {
         failStream(describeError(error));
       }
     },
-    [beginStream, failStream, modelId, params, setDraft, streaming, systemPrompt, turns],
+    [beginStream, failStream, modelId, params, setDraft, scrollToBottom, streaming, systemPrompt, turns],
   );
 
   const stop = useCallback(async () => {
@@ -223,9 +239,10 @@ export function ChatPage() {
       ) : null}
 
       <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
-        <Card className="min-h-0">
+        <Card className="relative min-h-0">
           <div
-            ref={scrollArea}
+            ref={transcriptRef}
+            onScroll={trackScroll}
             className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4"
           >
             {turns.length === 0 ? (
@@ -236,8 +253,9 @@ export function ChatPage() {
               />
             ) : (
               turns.map((turn) => (
-                <div key={turn.id} className="flex gap-3">
+                <div key={turn.id} className="flex animate-rise-in gap-3">
                   <span
+                    aria-hidden
                     className={
                       turn.role === "user"
                         ? "flex size-8 shrink-0 items-center justify-center rounded-lg bg-secondary text-secondary-foreground"
@@ -255,9 +273,22 @@ export function ChatPage() {
                       <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
                         {turn.role === "user" ? "You" : "Model"}
                       </span>
-                      <span className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                      {/* Visible on hover *and* on keyboard focus, so nobody has
+                          to discover these by mouse. */}
+                      <span className="flex items-center gap-1 opacity-0 transition-opacity duration-150 group-focus-within:opacity-100 group-hover:opacity-100">
                         {turn.content.length > 0 ? (
                           <CopyButton text={turn.content} label="Copy message" />
+                        ) : null}
+                        {turn.role === "assistant" && turn.id === lastAssistantId && !streaming ? (
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label="Regenerate answer"
+                            title="Regenerate answer"
+                            onClick={retry}
+                          >
+                            <RotateCw />
+                          </Button>
                         ) : null}
                         <Button
                           variant="ghost"
@@ -269,7 +300,15 @@ export function ChatPage() {
                         </Button>
                       </span>
                     </div>
-                    <div className="rounded-lg border bg-background/50 px-3.5 py-2.5">
+                    <div
+                      aria-busy={turn.streaming || undefined}
+                      className={cn(
+                        "rounded-lg border px-3.5 py-2.5",
+                        turn.role === "user"
+                          ? "border-transparent bg-secondary/60"
+                          : "bg-background/50",
+                      )}
+                    >
                       {turn.content.length === 0 && turn.streaming ? (
                         <span className="flex items-center gap-2 text-xs text-muted-foreground">
                           <Progress />
@@ -281,7 +320,10 @@ export function ChatPage() {
                         <>
                           <Markdown content={turn.content} />
                           {turn.streaming ? (
-                            <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse-dot rounded-sm bg-primary align-middle" />
+                            <span
+                              aria-hidden
+                              className="ml-0.5 inline-block h-4 w-1.5 animate-pulse-dot rounded-sm bg-primary align-middle"
+                            />
                           ) : null}
                         </>
                       )}
@@ -294,6 +336,18 @@ export function ChatPage() {
               ))
             )}
           </div>
+
+          {pinned || turns.length === 0 ? null : (
+            <Button
+              variant="secondary"
+              size="sm"
+              className="absolute bottom-3 left-1/2 -translate-x-1/2 animate-rise-in rounded-full shadow-panel"
+              onClick={() => scrollToBottom(true)}
+            >
+              <ArrowDown />
+              Jump to latest
+            </Button>
+          )}
 
           <div className="space-y-2 border-t px-5 py-3">
             {lastError ? (

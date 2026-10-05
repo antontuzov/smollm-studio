@@ -32,6 +32,8 @@ export interface Toast {
   title: string;
   description?: string;
   variant: ToastVariant;
+  /** Set just before removal so the exit animation can play. */
+  leaving: boolean;
 }
 
 interface UiState {
@@ -40,13 +42,25 @@ interface UiState {
   toasts: Toast[];
   setPage: (page: PageId) => void;
   setTheme: (theme: ThemeMode) => void;
-  pushToast: (toast: Omit<Toast, "id">) => void;
+  pushToast: (toast: Omit<Toast, "id" | "leaving">) => void;
   dismissToast: (id: string) => void;
+  /** Stop a toast from disappearing while the pointer is on it. */
+  holdToast: (id: string) => void;
+  resumeToast: (id: string) => void;
 }
+
+/** How long a toast stays up before it starts leaving. */
+const toastLifetime = (variant: ToastVariant): number => (variant === "error" ? 8000 : 4500);
+
+/** Must outlast the exit animation in tailwind.config.ts, or the toast pops. */
+const toastExitMs = 160;
 
 let toastSequence = 0;
 
-export const useUi = create<UiState>((set) => ({
+/** id -> the pending auto-dismiss timer and the time it was armed. */
+const timers = new Map<string, { handle: number; remainingMs: number }>();
+
+export const useUi = create<UiState>((set, get) => ({
   page: "home",
   theme: "light",
   toasts: [],
@@ -55,13 +69,56 @@ export const useUi = create<UiState>((set) => ({
   pushToast: (toast) => {
     toastSequence += 1;
     const id = `toast-${toastSequence}`;
-    set((state) => ({ toasts: [...state.toasts, { ...toast, id }].slice(-4) }));
-    // Toasts are transient by design; the Logs page keeps the permanent record.
-    setTimeout(() => {
-      set((state) => ({ toasts: state.toasts.filter((entry) => entry.id !== id) }));
-    }, toast.variant === "error" ? 8000 : 4500);
+    const duration = toastLifetime(toast.variant);
+    set((state) => {
+      const next = [...state.toasts, { ...toast, id, leaving: false }];
+      // Anything pushed out of the window must not keep a timer alive.
+      for (const dropped of next.slice(0, Math.max(0, next.length - 4))) {
+        const pending = timers.get(dropped.id);
+        if (pending) {
+          window.clearTimeout(pending.handle);
+          timers.delete(dropped.id);
+        }
+      }
+      return { toasts: next.slice(-4) };
+    });
+    timers.set(id, {
+      handle: window.setTimeout(() => get().dismissToast(id), duration),
+      remainingMs: duration,
+    });
   },
-  dismissToast: (id) => set((state) => ({ toasts: state.toasts.filter((entry) => entry.id !== id) })),
+  dismissToast: (id) => {
+    const pending = timers.get(id);
+    if (pending) {
+      window.clearTimeout(pending.handle);
+      timers.delete(id);
+    }
+    set((state) => ({
+      toasts: state.toasts.map((entry) => (entry.id === id ? { ...entry, leaving: true } : entry)),
+    }));
+    window.setTimeout(() => {
+      set((state) => ({ toasts: state.toasts.filter((entry) => entry.id !== id) }));
+    }, toastExitMs);
+  },
+  holdToast: (id) => {
+    const pending = timers.get(id);
+    if (!pending) {
+      return;
+    }
+    window.clearTimeout(pending.handle);
+    // Record roughly what is left so resuming does not restart the whole clock.
+    timers.set(id, { handle: 0, remainingMs: Math.min(pending.remainingMs, 1800) });
+  },
+  resumeToast: (id) => {
+    const pending = timers.get(id);
+    if (!pending || pending.handle !== 0) {
+      return;
+    }
+    timers.set(id, {
+      handle: window.setTimeout(() => get().dismissToast(id), pending.remainingMs),
+      remainingMs: pending.remainingMs,
+    });
+  },
 }));
 
 /** Fire a toast from anywhere without importing the store's setter. */

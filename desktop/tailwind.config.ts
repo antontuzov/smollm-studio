@@ -52,7 +52,18 @@ const config: Config = {
         sm: "calc(var(--radius) - 4px)",
       },
       fontFamily: {
-        sans: ["Inter", "ui-sans-serif", "system-ui", "-apple-system", "Segoe UI", "sans-serif"],
+        // Inter ships with the app (src/assets/fonts); the rest are honest
+        // fallbacks for the two subsets we do not vendor.
+        sans: [
+          '"Inter Variable"',
+          "ui-sans-serif",
+          "-apple-system",
+          "BlinkMacSystemFont",
+          "Segoe UI Variable Text",
+          "Segoe UI",
+          "system-ui",
+          "sans-serif",
+        ],
         mono: ["ui-monospace", "SFMono-Regular", "Menlo", "Consolas", "monospace"],
       },
       boxShadow: {
@@ -72,11 +83,38 @@ const config: Config = {
           "0%, 100%": { opacity: "1" },
           "50%": { opacity: "0.35" },
         },
+        // Skeleton sheen: a transform, so it never triggers layout.
+        shimmer: {
+          "0%": { transform: "translateX(-100%)" },
+          "100%": { transform: "translateX(100%)" },
+        },
+        "toast-in": {
+          from: { opacity: "0", transform: "translateY(8px) scale(0.98)" },
+          to: { opacity: "1", transform: "translateY(0) scale(1)" },
+        },
+        "toast-out": {
+          from: { opacity: "1", transform: "translateY(0) scale(1)" },
+          to: { opacity: "0", transform: "translateY(6px) scale(0.98)" },
+        },
+        // A streamed message arriving is the app's signature moment.
+        "rise-in": {
+          from: { opacity: "0", transform: "translateY(6px)" },
+          to: { opacity: "1", transform: "translateY(0)" },
+        },
+        "pop-in": {
+          from: { opacity: "0", transform: "scale(0.8)" },
+          to: { opacity: "1", transform: "scale(1)" },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
         "pulse-dot": "pulse-dot 1.4s ease-in-out infinite",
+        shimmer: "shimmer 1.8s ease-in-out infinite",
+        "toast-in": "toast-in 0.22s cubic-bezier(0.21, 1.02, 0.73, 1)",
+        "toast-out": "toast-out 0.16s ease-in forwards",
+        "rise-in": "rise-in 0.24s cubic-bezier(0.21, 1.02, 0.73, 1)",
+        "pop-in": "pop-in 0.16s ease-out",
       },
     },
   },

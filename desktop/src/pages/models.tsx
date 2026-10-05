@@ -10,7 +10,7 @@ import { ModelCard } from "@/components/model-card";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { EmptyState, ErrorState, SkeletonList } from "@/components/ui/feedback";
+import { EmptyState, ErrorState, SkeletonCards } from "@/components/ui/feedback";
 import { Input, Select, Switch } from "@/components/ui/field";
 
 import type { CatalogEntry } from "@/lib/types";
@@ -123,7 +123,7 @@ export function ModelsPage() {
         </Card>
 
         {catalog.isPending ? (
-          <SkeletonList rows={6} />
+          <SkeletonCards cards={6} />
         ) : catalog.isError ? (
           <ErrorState
             message="The model catalog could not be read"

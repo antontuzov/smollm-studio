@@ -5,14 +5,53 @@ import { cn } from "@/lib/utils";
 
 import type { ComponentType, ReactNode } from "react";
 
+/**
+ * A loading placeholder. The sheen is a transform, so a page full of these
+ * costs one composited layer and no layout work.
+ */
 export function Skeleton({ className }: { className?: string }) {
-  return <div className={cn("animate-pulse rounded-md bg-secondary/70", className)} />;
+  return (
+    <div
+      className={cn(
+        "relative overflow-hidden rounded-md bg-secondary/70",
+        className,
+      )}
+    >
+      <div className="absolute inset-0 -translate-x-full animate-shimmer bg-gradient-to-r from-transparent via-background/60 to-transparent" />
+    </div>
+  );
+}
+
+/** A stand-in for a loading region. Screen readers get one calm announcement. */
+function LoadingRegion({
+  label,
+  className,
+  children,
+}: {
+  label: string;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div role="status" aria-live="polite" aria-label={label} className={className}>
+      <span className="sr-only">{label}</span>
+      {children}
+    </div>
+  );
 }
 
 /** A stack of rows that stands in for a list while its query is loading. */
-export function SkeletonList({ rows = 4, className }: { rows?: number; className?: string }) {
+export function SkeletonList({
+  rows = 4,
+  className,
+  label = "Loading",
+}: {
+  rows?: number;
+  className?: string;
+  label?: string;
+}) {
   return (
-    <div className={cn("space-y-3", className)}>
+    <LoadingRegion label={label} className={cn("space-y-3", className)}>
       {Array.from({ length: rows }, (_, index) => (
         <div key={index} className="flex items-center gap-4 rounded-lg border px-4 py-3">
           <Skeleton className="h-10 w-10 shrink-0 rounded-md" />
@@ -23,7 +62,37 @@ export function SkeletonList({ rows = 4, className }: { rows?: number; className
           <Skeleton className="h-7 w-20" />
         </div>
       ))}
-    </div>
+    </LoadingRegion>
+  );
+}
+
+/** The shape a grid of model cards occupies while the catalog loads. */
+export function SkeletonCards({ cards = 6, className }: { cards?: number; className?: string }) {
+  return (
+    <LoadingRegion
+      label="Loading models"
+      className={cn("grid gap-4 sm:grid-cols-2 2xl:grid-cols-3", className)}
+    >
+      {Array.from({ length: cards }, (_, index) => (
+        <div key={index} className="panel space-y-3 p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex-1 space-y-2">
+              <Skeleton className="h-4 w-2/3" />
+              <Skeleton className="h-3 w-1/2" />
+            </div>
+            <Skeleton className="h-5 w-20 rounded-full" />
+          </div>
+          <Skeleton className="h-3 w-full" />
+          <Skeleton className="h-3 w-5/6" />
+          <div className="grid grid-cols-2 gap-2 pt-1">
+            {Array.from({ length: 4 }, (_, row) => (
+              <Skeleton key={row} className="h-4 w-full" />
+            ))}
+          </div>
+          <Skeleton className="h-8 w-32 rounded-md" />
+        </div>
+      ))}
+    </LoadingRegion>
   );
 }
 
@@ -80,20 +149,22 @@ export function EmptyState({
   return (
     <div
       className={cn(
-        "flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed px-6 py-12 text-center",
+        "flex animate-rise-in flex-col items-center justify-center gap-3 rounded-xl border border-dashed px-6 py-14 text-center",
         className,
       )}
     >
-      <Icon className="size-6 text-muted-foreground" />
-      <div className="space-y-1">
-        <p className="text-sm font-medium">{title}</p>
+      <span className="flex size-11 items-center justify-center rounded-xl bg-secondary/70 text-muted-foreground">
+        <Icon className="size-5" />
+      </span>
+      <div className="space-y-1.5">
+        <p className="text-sm font-medium tracking-tight">{title}</p>
         {description ? (
           <p className="mx-auto max-w-md text-xs leading-relaxed text-muted-foreground">
             {description}
           </p>
         ) : null}
       </div>
-      {action}
+      {action ? <div className="mt-1">{action}</div> : null}
     </div>
   );
 }

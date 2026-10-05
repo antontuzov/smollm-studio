@@ -7,14 +7,24 @@ interface PageHeaderProps {
   description?: ReactNode;
   icon?: ComponentType<{ className?: string }>;
   actions?: ReactNode;
+  /** Keep the header — and its Save button — over a long scrolling form. */
+  sticky?: boolean;
   className?: string;
 }
 
-export function PageHeader({ title, description, icon: Icon, actions, className }: PageHeaderProps) {
+export function PageHeader({
+  title,
+  description,
+  icon: Icon,
+  actions,
+  sticky = false,
+  className,
+}: PageHeaderProps) {
   return (
     <header
       className={cn(
         "flex flex-wrap items-start justify-between gap-4 border-b px-6 py-5",
+        sticky && "sticky top-0 z-10 bg-background/85 backdrop-blur-sm",
         className,
       )}
     >
@@ -31,7 +41,9 @@ export function PageHeader({ title, description, icon: Icon, actions, className 
           ) : null}
         </div>
       </div>
-      {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
+      {actions ? (
+        <div className="flex flex-wrap items-center justify-end gap-2 lg:shrink-0">{actions}</div>
+      ) : null}
     </header>
   );
 }

@@ -30,10 +30,21 @@ export function ModelCard({
   className,
 }: ModelCardProps) {
   return (
-    <Card className={cn("gap-0 p-4", className)}>
+    <Card
+      className={cn(
+        // Lift on hover and on keyboard focus, so the card reads as an object
+        // you can act on either way.
+        "group gap-0 p-4 transition-[border-color,box-shadow,transform] duration-200 ease-out",
+        "hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-panel",
+        "focus-within:border-primary/40 focus-within:shadow-panel motion-reduce:hover:translate-y-0",
+        className,
+      )}
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 space-y-1">
-          <h3 className="truncate text-sm font-semibold leading-snug">{model.displayName}</h3>
+          <h3 className="truncate text-sm font-semibold leading-snug tracking-tight">
+            {model.displayName}
+          </h3>
           <p className="truncate text-xs text-muted-foreground">
             {capitalize(model.family)} · {model.quantization} · {model.parametersB}B params
           </p>

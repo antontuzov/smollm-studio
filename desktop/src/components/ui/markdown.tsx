@@ -11,9 +11,10 @@ import javascript from "react-syntax-highlighter/dist/esm/languages/prism/javasc
 import { oneDark, oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
 
 import { useUi, prefersDark } from "@/stores/ui";
+import { CopyButton } from "@/components/ui/copy";
 import { cn } from "@/lib/utils";
 
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import type { Components } from "react-markdown";
 
 /**
@@ -32,6 +33,32 @@ SyntaxHighlighter.registerLanguage("javascript", javascript);
 const inlineCodeClass =
   "rounded border bg-secondary/60 px-1 py-0.5 font-mono text-[0.85em] text-foreground";
 
+/**
+ * A fenced block with its own chrome: language tag and a copy affordance that
+ * works with a keyboard as well as a pointer.
+ */
+function CodeSurface({
+  language,
+  code,
+  children,
+}: {
+  language?: string;
+  code: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="my-2.5 overflow-hidden rounded-lg border bg-background/70">
+      <div className="flex items-center justify-between gap-2 border-b bg-secondary/40 px-3 py-1">
+        <span className="truncate font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+          {language ?? "code"}
+        </span>
+        <CopyButton text={code} label="Copy code" className="opacity-70 hover:opacity-100" />
+      </div>
+      <div className="overflow-x-auto px-3 py-2.5">{children}</div>
+    </div>
+  );
+}
+
 function buildComponents(dark: boolean): Components {
   return {
     code: ({ className, children }) => {
@@ -39,27 +66,32 @@ function buildComponents(dark: boolean): Components {
       const language = /language-(\w+)/.exec(className ?? "")?.[1];
       if (language && registered.includes(language)) {
         return (
-          <SyntaxHighlighter
-            language={language}
-            style={dark ? oneDark : oneLight}
-            PreTag="div"
-            customStyle={{ margin: 0, fontSize: "12px", background: "transparent" }}
-            codeTagProps={{ style: { fontFamily: "inherit" } as CSSProperties }}
-          >
-            {text}
-          </SyntaxHighlighter>
+          <CodeSurface language={language} code={text}>
+            <SyntaxHighlighter
+              language={language}
+              style={dark ? oneDark : oneLight}
+              PreTag="div"
+              customStyle={{ margin: 0, fontSize: "12px", background: "transparent" }}
+              codeTagProps={{ style: { fontFamily: "inherit" } as CSSProperties }}
+            >
+              {text}
+            </SyntaxHighlighter>
+          </CodeSurface>
         );
       }
       if (text.includes("\n")) {
-        return <code className={cn("block font-mono text-xs leading-relaxed", className)}>{text}</code>;
+        // Unknown language: keep the block chrome, skip the highlighter.
+        return (
+          <CodeSurface language={language} code={text}>
+            <pre className="font-mono text-xs leading-relaxed">{text}</pre>
+          </CodeSurface>
+        );
       }
       return <code className={inlineCodeClass}>{text}</code>;
     },
-    pre: ({ children }) => (
-      <div className="my-2 overflow-x-auto rounded-lg border bg-background/70 px-3 py-2.5">
-        {children}
-      </div>
-    ),
+    // The block itself is styled by `code`; `pre` only has to not nest a second
+    // border around it.
+    pre: ({ children }) => <>{children}</>,
     a: ({ href, children }) => (
       // `target="_blank"` keeps the webview on this page: no window ever
       // navigates away from the app because a model said so.

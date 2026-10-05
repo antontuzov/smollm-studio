@@ -127,6 +127,7 @@ export function SettingsPage() {
         title="Settings"
         description="Everything is stored as plain JSON in the data folder and applied when you press Save. Nothing is sent anywhere."
         icon={Settings2}
+        sticky
         actions={
           <>
             {dirty ? <Badge tone="warning">unsaved changes</Badge> : null}

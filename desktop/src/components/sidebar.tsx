@@ -73,15 +73,34 @@ export function Sidebar() {
               onClick={() => setPage(entry.id)}
               aria-current={selected ? "page" : undefined}
               className={cn(
-                "flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
+                "group relative flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors duration-150",
                 selected
-                  ? "bg-primary/15 font-medium text-primary"
+                  ? "bg-primary/12 font-medium text-primary"
                   : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground",
               )}
             >
-              <Icon className={cn("size-4 shrink-0", selected && "text-primary")} />
+              {/* The selected rail marker: colour alone is not an affordance. */}
+              <span
+                aria-hidden
+                className={cn(
+                  "absolute inset-y-1 -left-2 w-0.5 rounded-full bg-primary transition-opacity duration-150",
+                  selected ? "opacity-100" : "opacity-0",
+                )}
+              />
+              <Icon
+                className={cn(
+                  "size-4 shrink-0 transition-transform duration-150",
+                  selected ? "text-primary" : "group-hover:scale-105",
+                )}
+              />
               <span className="flex-1 truncate text-left">{entry.label}</span>
-              <span className="font-mono text-[10px] text-muted-foreground/70">
+              <span
+                className={cn(
+                  // Quiet, never hidden: the shortcut is real information.
+                  "font-mono text-[10px] opacity-60 transition-opacity duration-150 group-hover:opacity-100",
+                  selected && "opacity-100",
+                )}
+              >
                 {entry.shortcut}
               </span>
             </button>
