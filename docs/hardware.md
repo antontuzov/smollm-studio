@@ -84,9 +84,12 @@ otherwise                      → cpu
 ```
 
 The chosen backend is a *recommendation*: it becomes the default in Settings, and
-you can override it there. If a requested backend is not compiled into the build,
-`EngineManager` falls back to something that works and logs the substitution,
-which the UI surfaces as a warning toast instead of hiding.
+you can override it there. A backend only helps if the build contains an engine
+that can run on it. `llama-cpp` and `candle` are cargo features that compile
+adapters without linking a native library, so in every build shipped today all
+four backends resolve to MockEngine. Whatever is substituted, `EngineManager`
+falls back to something that works and logs it, and the UI shows a warning toast
+saying which engine actually answered rather than hiding the swap.
 
 ## Practical guidance
 

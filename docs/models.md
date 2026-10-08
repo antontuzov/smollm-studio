@@ -139,8 +139,8 @@ quantisation, so the Library page can show it truthfully.
 ## Backends
 
 `Engine` is a trait; `EngineManager` holds one loaded model and hands out token
-streams. Selection order is: what you asked for → what is compiled in
-→ `mock`, with a warning recorded in the log and surfaced in the UI.
+streams. Selection order is: what you asked for → what this build can actually
+run → `mock`, with a warning recorded in the log and surfaced in the UI.
 
 | Backend | Cargo feature | State |
 | --- | --- | --- |
@@ -149,8 +149,12 @@ streams. Selection order is: what you asked for → what is compiled in
 | `llama-cpp` | `llama-cpp` | Adapter seam with a `TODO`. Needs vendored llama.cpp sources and a C/C++ toolchain. |
 | `candle` | `candle` | Adapter seam with a `TODO`. Experimental. |
 
-Enabling a feature today compiles an adapter that answers
-`unsupported_backend` — "no native library is linked yet" — rather than
+`EngineKind` keeps those two questions apart on purpose: `compiled()` says the
+feature is in the binary, `is_available()` also requires a library to have been
+linked, and nothing selects an engine that fails the second test. Enabling
+`--features llama-cpp` today therefore changes which code exists, not which
+engine answers — constructing that adapter directly is what reports
+`unsupported_backend` ("no native library is linked yet"), rather than the app
 pretending to run inference. See
 [`crates/smollm-engine/src/llama.rs`](../crates/smollm-engine/src/llama.rs).
 That is the honest state of this project, and the single most useful contribution

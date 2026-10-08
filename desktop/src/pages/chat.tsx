@@ -231,9 +231,10 @@ export function ChatPage() {
       {stats?.simulated ? (
         <Note tone="warning" icon={Gauge}>
           <p>
-            These tokens came from the mock engine, so the wording is deterministic filler generated
-            locally. Build with <span className="font-mono">--features llama-cpp</span> for real
-            inference.
+            These tokens came from the mock engine, so the wording is deterministic filler and the
+            speed is a modelled number. Nothing in this build links a runtime that reads weights:
+            llama.cpp has to be compiled and linked into the{" "}
+            <span className="font-mono">llama-cpp</span> feature before any of this is measured.
           </p>
         </Note>
       ) : null}

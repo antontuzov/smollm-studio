@@ -285,7 +285,10 @@ fn lock<T>(mutex: &Arc<Mutex<T>>) -> MutexGuard<'_, T> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-#[cfg(test)]
+/// Manager behaviour is exercised through MockEngine, the only engine in this
+/// crate that streams, so the suite exists only where that feature does. The
+/// crate still builds and its other tests still run with `mock` disabled.
+#[cfg(all(test, feature = "mock"))]
 mod tests {
     use super::*;
     use futures::StreamExt;

@@ -7,7 +7,8 @@
 //! type keeps the trait shape honest: it reports that it cannot generate.
 //!
 //! Enabling `--features llama-cpp` compiles the adapter; it does not yet fetch
-//! or build the C++ library. See `docs/hardware.md` for the intended build.
+//! or build the C++ library. See `docs/models.md` for what linking needs and
+//! `docs/hardware.md` for how backends resolve to engines.
 
 use smollm_core::chat::{
     EngineMetrics, GenerationRequest, LoadModelOptions, LoadModelRequest, ModelHandle,

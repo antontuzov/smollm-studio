@@ -52,7 +52,10 @@ SmolLLM Studio is honest about itself, and so is this README.
   show it labels it **simulated**.
 - Native backends live behind two opt-in Cargo features, `llama-cpp` and
   `candle`, and both are clearly marked adapters with a `TODO` at the seam
-  rather than working inference. Enabling a flag does not download llama.cpp.
+  rather than working inference. Enabling a flag does not download llama.cpp, and
+  does not change which engine answers: an engine is only chosen if this build
+  can actually run it, so Mock stays the one that replies until a library is
+  linked. That is deliberate — the app must always start.
 
 We deliberately did not rewrite llama.cpp. Instead the engine is an
 abstraction (`Engine` + `EngineManager`) with one integration point per

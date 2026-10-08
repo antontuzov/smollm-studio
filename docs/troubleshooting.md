@@ -66,9 +66,15 @@ Re-download rather than trusting the file.
 
 ## `unsupported_backend`
 
-You asked for a backend this binary does not contain — which today means
-`llama-cpp` or `candle`. The engine normally falls back and warns instead of
-failing; a hard error means the fallback was unavailable too.
+Some engine was asked to do what this binary cannot: the `llama-cpp` and `candle`
+cargo features compile adapters that answer with this note until a native library
+is linked into them, and the GGUF metadata reader refuses to generate at all.
+
+Nothing picks such an engine for you. Requesting Metal or CUDA on a build that
+cannot run it resolves to MockEngine and adds a warning saying which engine
+answered, and `smollm run --engine llama-cpp` prints the same admission as a
+warning line rather than failing. So this error reaching you means an adapter was
+constructed deliberately, not chosen by the app.
 
 ## `server_already_running` / `server_not_running`
 

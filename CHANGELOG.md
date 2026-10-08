@@ -59,6 +59,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Two more over-the-socket HTTP tests**, for the part-list `content` form and for
   `include_usage`, taking `crates/smollm-server` to eleven tests that run against
   a real listener rather than a mocked request.
+- **`EngineKind` separates *compiled* from *able to run*.** `compiled()` says a
+  cargo feature is in the binary, `is_linked()` says the engine behind it has the
+  native library it needs, and `is_available()` requires both. `unavailability()`
+  states which of the two is missing, in the sentence every surface shows — CLI
+  warning, load toast, `unsupported_backend`. Selection uses `is_available()`, so
+  no configuration can pick an engine that only knows how to refuse.
 
 ### Fixed
 
@@ -116,6 +122,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the library.
 - `HfClient::probe` returned the metadata endpoint as the download URL; it now
   returns the file URL and keeps the metadata URL internal.
+- **`--features llama-cpp` used to cost the app its ability to run anything.**
+  `is_available()` asked only whether a feature was compiled, so
+  `kind_for_backend` preferred the unlinked adapter over Mock, every
+  `load_model` came back `unsupported_backend`, and `fallback_warning` stayed
+  silent because the engine looked native. Metal, CUDA, Vulkan and CPU all
+  resolve to MockEngine now and say so in one sentence; `smollm run --engine
+  llama-cpp` prints the reason and answers normally instead of aborting. The
+  engine crate's tests are gated on the engine they need, so
+  `cargo test -p smollm-engine` passes with `--no-default-features`,
+  `--features llama-cpp`, `--features candle` and `--all-features` — the first
+  three previously did not compile at all.
+- **Three screens promised what a feature flag cannot deliver.** Chat, Home and
+  Settings said building with `llama-cpp` yields real inference; the flag
+  compiles an adapter and links no library, so they now say what is missing and
+  that the numbers shown are modelled, not measured.
 
 ## [0.1.0] - 2026-10-04
 

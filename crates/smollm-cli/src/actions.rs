@@ -804,9 +804,14 @@ fn engine_kind(flag: &str) -> Result<EngineKind> {
         None => Ok(fallback),
         Some(kind) if kind.is_available() => Ok(kind),
         Some(kind) => {
+            // `unavailability` distinguishes "not compiled" from "compiled as an
+            // adapter with no library linked", which are different problems for
+            // whoever is reading this on a machine they expected to run models on.
+            let reason = kind.unavailability().unwrap_or("is not available");
             eprintln!(
-                "warning: the {} engine is not compiled into this build; using {} instead. \
-                 docs/hardware.md lists the cargo features.",
+                "warning: the {} engine {reason} (cargo feature `{}`); using {} instead. \
+                 docs/models.md lists the features and what each one can do.",
+                kind.as_str(),
                 kind.as_str(),
                 fallback.as_str()
             );

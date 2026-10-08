@@ -243,7 +243,7 @@ export function SettingsPage() {
               onChange={(backend) => patch({ defaultBackend: backend as Backend })}
               hint={
                 appInfo.data?.simulatedEngine
-                  ? "This build only contains the mock engine and the GGUF metadata reader; native backends need the llama-cpp feature flag."
+                  ? "No library is linked into this build that runs weights, so the mock engine answers whichever backend you pick here. The llama-cpp and candle cargo features compile the adapters; docs/models.md explains what each still needs."
                   : "The engine falls back to something usable and tells you when it does."
               }
             />

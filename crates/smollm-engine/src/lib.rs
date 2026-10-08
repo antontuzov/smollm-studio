@@ -98,14 +98,54 @@ impl EngineKind {
         }
     }
 
-    /// Whether this build actually contains the engine.
-    pub fn is_available(self) -> bool {
+    /// Whether this build actually contains the engine's code.
+    pub fn compiled(self) -> bool {
         match self {
             Self::Mock => cfg!(feature = "mock"),
             Self::LlamaCpp => cfg!(feature = "llama-cpp"),
             Self::Candle => cfg!(feature = "candle"),
             Self::GgufMetadata => true,
         }
+    }
+
+    /// Whether a compiled engine has the native code it needs to run.
+    ///
+    /// `mock` and the metadata reader need none. The `llama-cpp` and `candle`
+    /// features compile an adapter without linking a library, so being compiled
+    /// is not the same as being able to answer a request.
+    pub fn is_linked(self) -> bool {
+        match self {
+            Self::Mock => cfg!(feature = "mock"),
+            Self::GgufMetadata => true,
+            #[cfg(feature = "llama-cpp")]
+            Self::LlamaCpp => llama::LlamaCppEngine::is_linked(),
+            #[cfg(not(feature = "llama-cpp"))]
+            Self::LlamaCpp => false,
+            #[cfg(feature = "candle")]
+            Self::Candle => candle::CandleEngine::is_linked(),
+            #[cfg(not(feature = "candle"))]
+            Self::Candle => false,
+        }
+    }
+
+    /// Whether an engine in this build can actually serve a request.
+    ///
+    /// Callers choose an engine with this, not with [`Self::compiled`]: picking
+    /// an unlinked adapter over Mock would leave the app unable to load anything.
+    pub fn is_available(self) -> bool {
+        self.compiled() && self.is_linked()
+    }
+
+    /// Why `is_available` is false, in the words every surface shows.
+    pub fn unavailability(self) -> Option<&'static str> {
+        if self.is_available() {
+            return None;
+        }
+        Some(if !self.compiled() {
+            "was not compiled into this build"
+        } else {
+            "is compiled as an adapter only: no native library is linked yet"
+        })
     }
 
     /// Engines offered in the UI: available ones first, unavailable ones last.
@@ -115,6 +155,10 @@ impl EngineKind {
         kinds.to_vec()
     }
 
+    /// Construct an engine, falling back to the metadata reader.
+    ///
+    /// This builds whatever the feature flags contain, including an adapter that
+    /// cannot run — check [`Self::is_available`] before choosing with it.
     pub fn build(self) -> Box<dyn Engine> {
         match self {
             #[cfg(feature = "mock")]
@@ -129,11 +173,12 @@ impl EngineKind {
         }
     }
 
-    /// Error surfaced when a caller asks for an engine this binary lacks.
+    /// Error surfaced when a caller asks for an engine this binary cannot serve.
     pub fn unavailable_error(self) -> AppError {
         AppError::UnsupportedBackend(format!(
-            "{} engine was not compiled into this build (cargo feature `{}`)",
+            "{} engine {} (cargo feature `{}`)",
             self.as_str(),
+            self.unavailability().unwrap_or("is not available"),
             self.as_str()
         ))
     }
@@ -175,6 +220,31 @@ mod tests {
             let engine = kind.build();
             assert!(!engine.name().is_empty(), "{kind:?} needs a name");
         }
+    }
+
+    #[test]
+    fn an_unlinked_adapter_is_never_chosen_over_mock() {
+        // `--features llama-cpp` compiles an adapter, it does not link llama.cpp.
+        // Callers pick an engine with `is_available`, so treating "compiled" as
+        // "usable" would hand the app a stub that fails every load.
+        assert!(!EngineKind::LlamaCpp.is_available());
+        assert!(!EngineKind::Candle.is_available());
+
+        let expected = if EngineKind::LlamaCpp.compiled() {
+            "adapter only"
+        } else {
+            "not compiled"
+        };
+        let reason = EngineKind::LlamaCpp
+            .unavailability()
+            .expect("an unavailable engine explains itself");
+        assert!(reason.contains(expected), "{reason}");
+
+        assert_eq!(
+            EngineKind::Mock.is_available(),
+            cfg!(feature = "mock"),
+            "Mock is what keeps the app running"
+        );
     }
 
     #[test]

@@ -105,7 +105,7 @@ impl Engine for GgufMetadataEngine {
 
     fn generate(&mut self, _request: GenerationRequest) -> AppResult<TokenStream> {
         Err(AppError::NotImplemented(
-            "the GGUF metadata backend only reads files; build with --features llama-cpp to run inference",
+            "the GGUF metadata backend only reads files; it has no runtime to generate with",
         ))
     }
 

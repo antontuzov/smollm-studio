@@ -67,9 +67,10 @@ export function HomePage() {
               generates deterministic text instead of running weights.
             </p>
             <p>
-              Build with the <span className="font-mono">llama-cpp</span> feature flag to run real
-              GGUF inference. Everything else in the app behaves the same, so this is the right place
-              to learn the interface.
+              The <span className="font-mono">llama-cpp</span> feature compiles an adapter for real
+              GGUF inference, but no native library is linked into this build yet, so switching the
+              flag on alone does not change these numbers. Everything else in the app behaves the
+              same, so this is the right place to learn the interface.
             </p>
           </Note>
         ) : null}

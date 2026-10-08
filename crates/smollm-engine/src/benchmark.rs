@@ -341,6 +341,9 @@ fn elapsed_ms(start: Instant) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // The mock engine is optional, so the tests that need it are too; the rest of
+    // this module is feature-independent and always runs.
+    #[cfg(feature = "mock")]
     use crate::mock::{MockConfig, MockEngine};
 
     fn spec(model_id: &str) -> BenchmarkConfig {
@@ -396,6 +399,7 @@ mod tests {
         assert!(missing.validate().is_err());
     }
 
+    #[cfg(feature = "mock")]
     #[tokio::test]
     async fn benchmarks_run_end_to_end_against_the_mock() {
         let mut manager =
@@ -427,6 +431,7 @@ mod tests {
         assert!(result.markdown_table().contains("| Peak RSS | 1.0 GB |"));
     }
 
+    #[cfg(feature = "mock")]
     #[tokio::test]
     async fn repeated_runs_report_the_best_pass() {
         let mut manager =
