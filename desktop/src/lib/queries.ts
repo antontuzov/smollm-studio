@@ -90,8 +90,10 @@ export function useServerStatus() {
 export function useServerExamples(modelId: string) {
   return useQuery({
     queryKey: queryKeys.serverExamples(modelId),
+    // No model chosen is a valid state: the snippets say `"model": "default"`,
+    // which the server resolves to whatever is resident, and /health never
+    // needs one.
     queryFn: () => api.serverExamples(modelId.length > 0 ? modelId : undefined),
-    enabled: modelId.length > 0,
   });
 }
 

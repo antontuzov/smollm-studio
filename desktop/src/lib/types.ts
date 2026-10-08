@@ -335,6 +335,8 @@ export interface ServerStatus {
   baseUrl: string;
   engine: string;
   loadedModel: string | null;
+  /** Exactly what `/v1/models` offers, resident model first. */
+  servedModels: string[];
   requests: number;
   uptimeSeconds: number;
   simulated: boolean;
@@ -342,7 +344,10 @@ export interface ServerStatus {
 
 export interface ServerExamples {
   curl: string;
+  /** The same call with `stream: true`, for `curl -N`. */
+  curlStream: string;
   python: string;
+  health: string;
   baseUrl: string;
   model: string;
 }

@@ -4,7 +4,7 @@
 //! whole point is that existing SDKs can talk to this server unchanged.
 
 use serde::{Deserialize, Serialize};
-use smollm_core::chat::{ChatMessage, Role, TokenUsage};
+use smollm_core::chat::{chat_message, ChatMessage, Role, TokenUsage};
 
 /// `stop` may be a single string or a list, in both directions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,12 +36,62 @@ impl StopSequences {
     }
 }
 
+/// One item of the `messages` array, exactly as it arrives on the wire.
+///
+/// Kept separate from the app's [`ChatMessage`] because OpenAI's `content` is
+/// not always a string: SDKs send a list of typed parts, and an assistant turn
+/// with only tool calls sends `null`. Rejecting those would break real clients,
+/// so they are flattened here instead of in the shared DTO.
+#[derive(Debug, Clone, Deserialize)]
+pub struct WireMessage {
+    pub role: Role,
+    #[serde(default, deserialize_with = "content_from_wire")]
+    pub content: String,
+}
+
+impl WireMessage {
+    pub fn to_chat(&self) -> ChatMessage {
+        chat_message(self.role, self.content.clone())
+    }
+}
+
+/// `content` as a string, as a list of parts, or as `null`.
+fn content_from_wire<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        None => String::new(),
+        Some(serde_json::Value::String(text)) => text,
+        Some(serde_json::Value::Array(parts)) => {
+            // Text parts concatenate in order; image and audio parts are
+            // dropped rather than guessed at, because the engines behind this
+            // server generate from text.
+            parts.iter().map(part_text).collect::<Vec<_>>().join("")
+        }
+        Some(other) => other.to_string(),
+    })
+}
+
+fn part_text(part: &serde_json::Value) -> String {
+    match part {
+        serde_json::Value::String(text) => text.clone(),
+        serde_json::Value::Object(map) => map
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        _ => String::new(),
+    }
+}
+
 /// `POST /v1/chat/completions` body.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ChatCompletionRequest {
     pub model: Option<String>,
     #[serde(default)]
-    pub messages: Vec<ChatMessage>,
+    pub messages: Vec<WireMessage>,
     #[serde(default)]
     pub temperature: Option<f32>,
     #[serde(default)]
@@ -109,6 +159,11 @@ impl ChatCompletionRequest {
                     .find(|message| message.role == Role::System)
                     .map(|message| message.content.as_str())
             })
+    }
+
+    /// The conversation in the app's own shape.
+    pub fn chat_messages(&self) -> Vec<ChatMessage> {
+        self.messages.iter().map(WireMessage::to_chat).collect()
     }
 
     pub fn max_tokens(&self) -> Option<u32> {
@@ -448,6 +503,38 @@ mod tests {
             serde_json::from_str(r#"{"messages":[{"role":"user","content":"hi"}],"n":3}"#)
                 .expect("parses");
         assert!(request.validate().is_err());
+    }
+
+    #[test]
+    fn content_accepts_a_part_list_and_null() {
+        let request: ChatCompletionRequest = serde_json::from_str(
+            r#"{"messages":[
+                {"role":"user","content":[
+                    {"type":"text","text":"one "},
+                    {"type":"image_url","image_url":{"url":"ignored"}},
+                    {"type":"text","text":"two"}]},
+                {"role":"assistant","content":null},
+                {"role":"user","content":"plain"}
+            ]}"#,
+        )
+        .expect("the wire form is accepted");
+        let messages = request.chat_messages();
+        assert_eq!(messages[0].content, "one two");
+        assert_eq!(messages[1].content, "");
+        assert_eq!(messages[2].content, "plain");
+        assert_eq!(request.system_prompt(), None);
+    }
+
+    #[test]
+    fn a_system_message_still_heads_a_part_list_conversation() {
+        let request: ChatCompletionRequest = serde_json::from_str(
+            r#"{"messages":[
+                {"role":"system","content":[{"type":"text","text":"be brief"}]},
+                {"role":"user","content":"hi"}
+            ]}"#,
+        )
+        .expect("parses");
+        assert_eq!(request.system_prompt(), Some("be brief"));
     }
 
     #[test]

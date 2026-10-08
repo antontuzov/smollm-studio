@@ -204,6 +204,14 @@ async fn streaming_chat_emits_sse_events_and_done() {
             .unwrap_or_default(),
         "text/event-stream"
     );
+    // A proxy that buffers or rewrites turns a token stream into a wait.
+    let no_buffering = response
+        .headers()
+        .get("x-accel-buffering")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert_eq!(no_buffering, "no");
 
     let text = response.text().await.expect("body");
     let lines: Vec<&str> = text
@@ -238,6 +246,115 @@ async fn streaming_chat_emits_sse_events_and_done() {
     assert_eq!(finish.as_deref(), Some("stop"));
 
     started.handle.stop().await.expect("stops");
+}
+
+#[tokio::test]
+async fn content_parts_and_null_are_accepted_over_the_socket() {
+    // Real SDKs send `content` as a list of typed parts. Rejecting that with a
+    // 422 would break them, so the parts must reach the engine joined.
+    let started = start().await;
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("{}/v1/chat/completions", started.base))
+        .json(&serde_json::json!({
+            "model": MODEL,
+            "messages": [
+                { "role": "system", "content": [{ "type": "text", "text": "be brief" }] },
+                { "role": "assistant", "content": null },
+                { "role": "user", "content": [
+                    { "type": "text", "text": "Explain " },
+                    { "type": "image_url", "image_url": { "url": "https://example.invalid/x.png" } },
+                    { "type": "text", "text": "token budgets" }
+                ] }
+            ]
+        }))
+        .send()
+        .await
+        .expect("posts");
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+    let body: serde_json::Value = response.json().await.expect("json");
+    let content = body["choices"][0]["message"]["content"]
+        .as_str()
+        .expect("content");
+    assert!(
+        content.contains("token budgets"),
+        "the text parts must arrive joined: {content:?}"
+    );
+    assert!(
+        !content.contains("image_url") && !content.contains("example.invalid"),
+        "non-text parts are dropped, not stringified: {content:?}"
+    );
+    started.handle.stop().await.expect("stops");
+}
+
+#[tokio::test]
+async fn streamed_usage_only_appears_when_the_client_asks() {
+    let started = start().await;
+    let client = reqwest::Client::new();
+    let url = format!("{}/v1/chat/completions", started.base);
+
+    let with_usage = client
+        .post(&url)
+        .json(&serde_json::json!({
+            "model": MODEL,
+            "messages": [{ "role": "user", "content": "Explain Rust ownership briefly." }],
+            "stream": true,
+            "stream_options": { "include_usage": true }
+        }))
+        .send()
+        .await
+        .expect("posts");
+    let text = with_usage.text().await.expect("body");
+    let lines: Vec<serde_json::Value> = data_chunks(&text);
+
+    assert_eq!(lines.last().expect("done").as_str(), Some("[DONE]"));
+    let usage = lines[lines.len() - 2].clone();
+    assert_eq!(
+        usage["choices"].as_array().expect("choices").len(),
+        0,
+        "OpenAI's usage chunk carries no choices"
+    );
+    assert!(usage["usage"].is_object(), "got {usage}");
+    assert!(usage["usage"]["completion_tokens"].as_u64().expect("t") > 0);
+    assert_eq!(
+        usage["usage"]["total_tokens"].as_u64().expect("total"),
+        usage["usage"]["prompt_tokens"].as_u64().expect("prompt")
+            + usage["usage"]["completion_tokens"]
+                .as_u64()
+                .expect("completion")
+    );
+
+    // The default: a strict client that never asked for usage must not receive it.
+    let without = client
+        .post(&url)
+        .json(&chat_body(true))
+        .send()
+        .await
+        .expect("posts");
+    let text = without.text().await.expect("body");
+    let lines: Vec<serde_json::Value> = data_chunks(&text);
+    assert_eq!(lines.last().expect("done").as_str(), Some("[DONE]"));
+    for chunk in &lines[..lines.len() - 1] {
+        assert!(
+            chunk.get("usage").is_none(),
+            "content chunks never carry usage: {chunk}"
+        );
+        assert!(!chunk["choices"].as_array().expect("choices").is_empty());
+    }
+    started.handle.stop().await.expect("stops");
+}
+
+/// Every `data:` payload of an SSE body, with the marker stripped.
+fn data_chunks(body: &str) -> Vec<serde_json::Value> {
+    body.lines()
+        .filter(|line| line.starts_with("data:"))
+        .map(|line| line.trim_start_matches("data:").trim())
+        .map(|payload| {
+            serde_json::from_str(payload)
+                .unwrap_or_else(|_| serde_json::Value::String(payload.to_string()))
+        })
+        .collect()
 }
 
 #[tokio::test]
@@ -308,6 +425,14 @@ async fn errors_use_the_openai_error_envelope() {
         .await
         .expect("posts");
     assert_eq!(malformed.status(), reqwest::StatusCode::BAD_REQUEST);
+    // A client that cannot parse the body still needs an envelope it can read.
+    let body: serde_json::Value = malformed.json().await.expect("json envelope");
+    assert_eq!(body["error"]["type"], "invalid_request_error");
+    assert_eq!(body["error"]["param"], "body");
+    assert!(body["error"]["message"]
+        .as_str()
+        .expect("msg")
+        .contains("not valid OpenAI JSON"));
 
     let unknown_route = client
         .get(format!("{}/v1/nope", started.base))

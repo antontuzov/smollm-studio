@@ -160,6 +160,7 @@ pub fn status(state: &SharedState, running: bool) -> ServerStatus {
         base_url: state.config.base_url(),
         engine,
         loaded_model,
+        served_models: state.served_model_ids(),
         requests: state.request_count(),
         uptime_seconds: state.uptime_seconds(),
         simulated,
@@ -191,6 +192,31 @@ pub fn curl_example(config: &ServerConfig, model_id: &str) -> String {
         base = config.base_url(),
         model = model_label(model_id),
     )
+}
+
+/// Server-sent-events curl snippet. `-N` matters: curl buffers otherwise, which
+/// turns a token stream into one block at the end.
+pub fn curl_stream_example(config: &ServerConfig, model_id: &str) -> String {
+    format!(
+        concat!(
+            "curl -N {base}/v1/chat/completions \\\n",
+            "  -H \"Content-Type: application/json\" \\\n",
+            "  -d '{{\n",
+            "    \"model\": \"{model}\",\n",
+            "    \"messages\": [{{\"role\": \"user\", ",
+            "\"content\": \"Explain Rust ownership briefly.\"}}],\n",
+            "    \"stream\": true,\n",
+            "    \"stream_options\": {{\"include_usage\": true}}\n",
+            "  }}'"
+        ),
+        base = config.base_url(),
+        model = model_label(model_id),
+    )
+}
+
+/// Liveness check, including the model ids `/v1/models` offers.
+pub fn health_example(config: &ServerConfig) -> String {
+    format!("curl -s {base}/health", base = config.base_url())
 }
 
 /// Python OpenAI SDK snippet shown on the Server page.
@@ -264,6 +290,18 @@ mod tests {
         assert!(python.contains("api_key=\"local\""));
         assert!(python.contains("model=\"default\""), "no model chosen yet");
         assert!(python.contains("print(response.choices[0].message.content)"));
+
+        let stream = curl_stream_example(&config, "qwen2.5-0.5b-instruct-gguf");
+        assert!(
+            stream.contains("curl -N "),
+            "curl must not buffer the stream"
+        );
+        assert!(stream.contains("\"stream\": true"));
+        assert!(stream.contains("\"include_usage\": true"));
+        assert_ne!(stream, curl);
+
+        let health = health_example(&config);
+        assert_eq!(health, "curl -s http://127.0.0.1:8080/health");
     }
 
     #[test]
@@ -275,6 +313,13 @@ mod tests {
         assert_eq!(snapshot.engine, "mock");
         assert!(snapshot.simulated, "mock must be labelled simulated");
         assert!(snapshot.loaded_model.is_none());
+        assert!(snapshot.served_models.is_empty());
+
+        state.advertise(&["a-gguf".to_string(), "b-gguf".to_string()]);
+        assert_eq!(
+            status(&state, true).served_models,
+            vec!["a-gguf".to_string(), "b-gguf".to_string()]
+        );
     }
 
     #[tokio::test]

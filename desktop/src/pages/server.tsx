@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowDown, CirclePlay, Copy, Server, Square, Terminal } from "lucide-react";
+import { ArrowDown, CirclePlay, Copy, ListChecks, Server, Square, Terminal, Waves } from "lucide-react";
 
 import { startServer, stopServer } from "@/lib/actions";
 import { describeError, formatTime, formatUptime } from "@/lib/format";
@@ -37,7 +37,7 @@ export function ServerPage() {
   const [host, setHost] = useState("127.0.0.1");
   const [port, setPort] = useState(8080);
   const [modelId, setModelId] = useState("");
-  const [exampleTab, setExampleTab] = useState<"curl" | "python">("curl");
+  const [exampleTab, setExampleTab] = useState<"curl" | "stream" | "python">("curl");
 
   // Defaults come from the saved settings, and stop coming from Rust once the
   // user edits the field.
@@ -59,6 +59,9 @@ export function ServerPage() {
   const servingModel = modelId || handle?.modelId || "";
   const examples = useServerExamples(servingModel);
   const running = status.data?.running ?? false;
+  // What the running server actually offers, which is not the same list as the
+  // local library: the resident model comes first.
+  const served = status.data?.servedModels ?? [];
   const config: ServerConfig = { host, port, defaultModelId: modelId.length > 0 ? modelId : null };
 
   const modelOptions = (catalog.data ?? [])
@@ -158,7 +161,33 @@ export function ServerPage() {
                     <CopyButton text={status.data.baseUrl} label="Copy base URL" />
                   </span>
                 ) : null}
+                {examples.data ? (
+                  <span className="flex items-center gap-1 rounded-md border bg-background/60 px-2 py-1 font-mono text-xs">
+                    /health
+                    <CopyButton text={examples.data.health} label="Copy the health check" />
+                  </span>
+                ) : null}
               </div>
+
+              {served.length > 0 ? (
+                <div className="space-y-2">
+                  <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                    <ListChecks className="size-3.5" />
+                    Offered on <span className="font-mono">/v1/models</span>
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {served.map((id) => (
+                      <Badge
+                        key={id}
+                        tone={id === status.data?.loadedModel ? "success" : "neutral"}
+                        className="font-mono"
+                      >
+                        {id}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
 
               {status.isError ? (
                 <Note tone="danger">
@@ -288,31 +317,33 @@ export function ServerPage() {
                     onChange={setExampleTab}
                     items={[
                       { id: "curl", label: "curl", icon: Terminal },
+                      { id: "stream", label: "Streaming", icon: Waves },
                       { id: "python", label: "Python", icon: Server },
                     ]}
                   />
                   {exampleTab === "curl" ? (
                     <CodeBlock language="bash" code={examples.data.curl} />
+                  ) : exampleTab === "stream" ? (
+                    <CodeBlock language="bash" code={examples.data.curlStream} />
                   ) : (
                     <CodeBlock language="python" code={examples.data.python} />
                   )}
                 </>
               ) : (
-                <EmptyState
-                  icon={Terminal}
-                  title="Nothing to show yet"
-                  description="Load a model (or start the server with one resident) and both snippets appear here, copied straight from the live endpoint."
-                />
+                <SkeletonList rows={4} />
               )}
             </CardContent>
             <CardFooter>
               <span className="text-[11px] leading-relaxed text-muted-foreground">
+                <span className="font-mono">/health</span>,{" "}
+                <span className="font-mono">/v1/models</span>,{" "}
+                <span className="font-mono">/v1/models/{"{id}"}</span>,{" "}
                 <span className="font-mono">/v1/chat/completions</span>,{" "}
-                <span className="font-mono">/v1/completions</span>,{" "}
-                <span className="font-mono">/v1/models</span> and{" "}
+                <span className="font-mono">/v1/completions</span> and{" "}
                 <span className="font-mono">/v1/engine/metrics</span> are implemented;{" "}
-                <span className="font-mono">stream: true</span>{" "}
-                returns server-sent events.
+                <span className="font-mono">stream: true</span> returns server-sent events and{" "}
+                <span className="font-mono">stream_options.include_usage</span> adds the final
+                usage-only chunk.
               </span>
             </CardFooter>
           </Card>
@@ -321,9 +352,9 @@ export function ServerPage() {
             <CardHeader title="Notes" description="What is real here and what is not." />
             <CardContent className="space-y-3 text-xs leading-relaxed text-muted-foreground">
               <p>
-                Requests are served by the model resident in the engine. If nothing is loaded, the
-                server loads the default model on the first request, which is why the very first call
-                can be slower.
+                Requests are served by the model already resident in the engine; nothing is loaded on
+                demand. If none is loaded you get a 404 that says so, rather than a first call that
+                quietly waits on a download.
               </p>
               <p>
                 The server is started inside this app process. Stopping the app stops the API; there

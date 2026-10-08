@@ -171,6 +171,9 @@ pub struct ServerStatus {
     pub base_url: String,
     pub engine: String,
     pub loaded_model: Option<String>,
+    /// Model ids `/v1/models` offers, resident one first. Empty while the server
+    /// is stopped, where it means "what the library could serve".
+    pub served_models: Vec<String>,
     pub requests: u64,
     pub uptime_seconds: u64,
     pub simulated: bool,
@@ -185,6 +188,7 @@ impl Default for ServerStatus {
             base_url: String::new(),
             engine: String::new(),
             loaded_model: None,
+            served_models: Vec::new(),
             requests: 0,
             uptime_seconds: 0,
             simulated: false,

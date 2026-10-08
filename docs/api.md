@@ -13,7 +13,7 @@ Loopback only. No key is required or checked, which is safe precisely because
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/health` | Liveness, engine name, resident model, request count |
+| GET | `/health` | Liveness, engine name, resident model, request count, served model ids |
 | GET | `/v1/models` | OpenAI model list: the resident model plus every downloaded model |
 | GET | `/v1/models/{model_id}` | One model card |
 | POST | `/v1/chat/completions` | Chat, streamed or aggregated |
@@ -45,13 +45,25 @@ Accepted and ignored where the backend cannot honour them yet: `n`, `user`,
 `echo`/`suffix` on `/v1/completions`. A `prompt` array is served one item at a
 time. This keeps official SDKs happy without faking features.
 
-If `model` is omitted, the server's default model is used. If nothing is
-resident, the first request loads it — which is why the first call is slower.
+`messages[].content` accepts all three forms OpenAI allows: a plain string, `null`
+(an assistant turn that only carried tool calls), and the list of typed parts SDKs
+send for multimodal input. Text parts concatenate in order; image and audio parts
+are dropped, because every engine behind this server generates from text.
+
+If `model` is omitted, `""`, `"default"` or `"auto"`, the request goes to the model
+resident in the engine. Nothing is loaded on demand: if no model is resident the
+request fails with a 404 that says so, rather than quietly starting a download you
+did not ask for.
 
 ### Streaming
 
 `stream: true` returns `text/event-stream`: standard `chat.completion.chunk`
 deltas, `finish_reason` on the final content chunk, then `data: [DONE]`.
+With `stream_options: {"include_usage": true}` one more chunk lands between the
+last content chunk and `[DONE]`: its `choices` is `[]` and it carries `usage`.
+Content chunks never carry `usage`, so a strict client sees exactly the shape it
+asked for. Responses set `Cache-Control: no-cache, no-transform` and
+`x-accel-buffering: no`; with curl, `-N` keeps the client from buffering too.
 Cancellation is honoured — closing the HTTP connection stops generation rather
 than letting it run to completion.
 
@@ -77,6 +89,10 @@ OpenAI's envelope, with the app's stable code carried in `code`:
 | 501 | `model_not_supported` | `unsupported_backend`, `not_implemented` |
 | 503 | `server_error` | `server_not_running` |
 | 500 | `internal_server_error` | `internal_error`, `engine_load_failed` |
+
+A body that is not valid JSON gets the same envelope at 400 with
+`"param": "body"` — it is parsed by hand, so no client ever has to read Axum's
+plain-text 422.
 
 ### Worked example
 
@@ -138,6 +154,15 @@ with counts, derived from the loaded catalog including any local overlay.
 model that was never explicitly loaded. `run_benchmark` uses its own engine
 instance so it never competes with the chat; on failure it reports through
 `chat-error` with `requestId: "benchmark"`.
+
+`get_server_status` returns `running`, `host`, `port`, `baseUrl`, `engine`,
+`loadedModel`, `servedModels`, `requests`, `uptimeSeconds` and `simulated`.
+`servedModels` is the exact id list `/v1/models` offers, resident model first,
+so the Server page can show what a client would see rather than what the
+library happens to contain. `get_server_examples` returns `curl`, `curlStream`
+(the same call with `stream: true`, built for `curl -N`), `python`, `health`,
+`baseUrl` and the `model` the snippets name — `"default"` until something is
+resident, which the server then resolves for you.
 
 ## Events
 

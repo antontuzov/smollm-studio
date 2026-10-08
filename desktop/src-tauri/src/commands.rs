@@ -64,7 +64,11 @@ pub struct SamplingPreset {
 #[serde(rename_all = "camelCase")]
 pub struct ServerExamples {
     pub curl: String,
+    /// The same call with `stream: true`, ready for `curl -N`.
+    pub curl_stream: String,
     pub python: String,
+    /// Liveness check with the served model ids.
+    pub health: String,
     pub base_url: String,
     pub model: String,
 }
@@ -700,6 +704,9 @@ pub async fn get_server_status(state: Shared<'_>) -> AppResult<ServerStatus> {
         return Ok(server::status(&shared, state.server_is_running()));
     }
     let config = state.server_config()?;
+    // Lock order matters: the engine manager is a plain mutex, so the servable
+    // ids are collected (and released) before this function takes the lock below.
+    let served = servable_model_ids(&state);
     let manager = state.engine()?;
     Ok(ServerStatus {
         running: false,
@@ -708,6 +715,7 @@ pub async fn get_server_status(state: Shared<'_>) -> AppResult<ServerStatus> {
         base_url: String::new(),
         engine: manager.engine_name(),
         loaded_model: manager.loaded_handle().map(|handle| handle.model_id),
+        served_models: served,
         requests: 0,
         uptime_seconds: 0,
         simulated: manager.is_simulated(),
@@ -731,7 +739,9 @@ pub async fn get_server_examples(
         .unwrap_or_default();
     Ok(ServerExamples {
         curl: server::curl_example(&config, &model),
+        curl_stream: server::curl_stream_example(&config, &model),
         python: server::python_example(&config, &model),
+        health: server::health_example(&config),
         base_url: format!("{}/v1", config.base_url()),
         model: if model.trim().is_empty() {
             "default".to_string()
@@ -743,6 +753,14 @@ pub async fn get_server_examples(
 
 /// Advertise every model the app could serve, so `/v1/models` is useful.
 fn advertise_all(shared: &SharedState, state: &Arc<AppState>) {
+    shared.advertise(&servable_model_ids(state));
+}
+
+/// Model ids this app could serve: the resident one first, then the library.
+///
+/// Takes the engine lock internally and releases it before returning, so
+/// callers must not hold it across this call.
+fn servable_model_ids(state: &Arc<AppState>) -> Vec<String> {
     let library = state.library();
     let mut ids: Vec<String> = state
         .catalog
@@ -758,7 +776,7 @@ fn advertise_all(shared: &SharedState, state: &Arc<AppState>) {
             }
         }
     }
-    shared.advertise(&ids);
+    ids
 }
 
 pub(crate) fn refresh_advertised(app: &AppHandle, state: &Arc<AppState>) {

@@ -379,7 +379,7 @@ fn last_user_line(prompt: &str) -> String {
         .lines()
         .rev()
         .map(str::trim)
-        .find(|line| !line.is_empty())
+        .find(|line| !line.is_empty() && !ROLE_WORDS.contains(line))
         .unwrap_or("");
     let clipped: String = line.chars().take(120).collect();
     if clipped.is_empty() {
@@ -389,13 +389,34 @@ fn last_user_line(prompt: &str) -> String {
     }
 }
 
-/// ChatML-style control tokens, plus the llama.cpp template suffix, replaced
-/// with newlines so the mock can quote the actual question back.
+/// Stripping a template leaves its role labels standing alone as a line
+/// (`assistant`, `model`); they are never what the user asked about.
+const ROLE_WORDS: &[&str] = &[
+    "system",
+    "user",
+    "assistant",
+    "model",
+    "instruction",
+    "response",
+];
+
+/// Chat-template control tokens, replaced with newlines so the mock can quote
+/// the actual question back. Covers the markers this app's renderer emits.
 const TEMPLATE_MARKERS: &[&str] = &[
     "<|system|>",
     "<|user|>",
     "<|assistant|>",
     "<|end|>",
+    "<system>",
+    "</system>",
+    "<user>",
+    "</user>",
+    "<assistant>",
+    "</assistant>",
+    "<start_of_turn>",
+    "<end_of_turn>",
+    "<|start_of_role|>",
+    "<|end_of_role|>",
     "im_start",
     "im_end",
     "### Instruction:",
@@ -659,6 +680,16 @@ mod tests {
         assert_eq!(
             last_user_line("<|user|>\nkeep it short\n<|end|>"),
             "keep it short"
+        );
+        // The app's own renderer puts role tags on lines of their own; the topic
+        // the mock quotes back must be the question, not the scaffolding.
+        assert_eq!(
+            last_user_line("<user>\nExplain token budgets\n</user>\n<assistant>\n"),
+            "Explain token budgets"
+        );
+        assert_eq!(
+            last_user_line("<start_of_turn>user\nhi<end_of_turn>\n<start_of_turn>model\n"),
+            "hi"
         );
     }
 }

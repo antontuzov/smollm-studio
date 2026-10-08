@@ -38,8 +38,9 @@ SmolLLM Studio is honest about itself, and so is this README.
   quantisation, context length, tensor count, license).
 - The whole UI: eight pages, streaming chat, sampling controls, server page
   with copyable client snippets, benchmarks, log viewer, settings.
-- An OpenAI-compatible HTTP server (`/v1/chat/completions`, `/v1/completions`,
-  `/v1/models`, `/v1/engine/metrics`) with `stream: true` over SSE.
+- An OpenAI-compatible HTTP server (`/health`, `/v1/models`, `/v1/models/{id}`,
+  `/v1/chat/completions`, `/v1/completions`, `/v1/engine/metrics`) with
+  `stream: true` over SSE and `stream_options.include_usage`.
 - A command-line twin (`smollm`) that shares every crate with the desktop app.
 
 **Not wired up yet**

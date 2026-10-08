@@ -1,5 +1,6 @@
 //! Axum handlers for the OpenAI-compatible surface.
 
+use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -45,6 +46,12 @@ impl ApiError {
             message,
             "internal_server_error",
         )
+    }
+
+    /// Name the offending field, which is what OpenAI's `param` is for.
+    pub fn with_param(mut self, param: impl Into<String>) -> Self {
+        self.body.error.param = Some(param.into());
+        self
     }
 
     /// Map an app error onto an HTTP status, keeping the stable code for clients.
@@ -177,16 +184,16 @@ async fn engine_metrics(
 
 async fn chat_completions(
     State(state): State<SharedState>,
-    Json(request): Json<ChatCompletionRequest>,
+    body: Bytes,
 ) -> Result<Response, ApiError> {
+    let request: ChatCompletionRequest = parse_body(body)?;
     request.validate().map_err(ApiError::invalid)?;
     let model = state.resolve_model(request.model.as_deref())?;
 
     let messages: Vec<_> = request
-        .messages
-        .iter()
+        .chat_messages()
+        .into_iter()
         .filter(|message| message.role != Role::Assistant || !message.content.is_empty())
-        .cloned()
         .collect();
     if messages.is_empty() {
         return Err(ApiError::invalid(
@@ -226,7 +233,21 @@ async fn chat_completions(
     );
 
     if request.stream {
-        return Ok(sse_chat(id, model, engine_fingerprint(&state), stream).into_response());
+        // OpenAI only reports usage on a stream when the client asks for it, and
+        // then as a final chunk with an empty `choices`.
+        let include_usage = request
+            .stream_options
+            .as_ref()
+            .and_then(|options| options.include_usage)
+            .unwrap_or(false);
+        return Ok(sse_chat(
+            id,
+            model,
+            engine_fingerprint(&state),
+            include_usage,
+            prompt,
+            stream,
+        ));
     }
     let aggregated = aggregate(stream).await;
     if let Some(error) = aggregated.error {
@@ -242,10 +263,8 @@ async fn chat_completions(
     .into_response())
 }
 
-async fn completions(
-    State(state): State<SharedState>,
-    Json(request): Json<CompletionRequest>,
-) -> Result<Response, ApiError> {
+async fn completions(State(state): State<SharedState>, body: Bytes) -> Result<Response, ApiError> {
+    let request: CompletionRequest = parse_body(body)?;
     let prompt = request.prompt.as_str().to_string();
     if prompt.trim().is_empty() {
         return Err(ApiError::invalid("'prompt' must not be empty"));
@@ -283,7 +302,7 @@ async fn completions(
     );
 
     if request.stream {
-        return Ok(sse_text(id, model, engine_fingerprint(&state), stream).into_response());
+        return Ok(sse_text(id, model, engine_fingerprint(&state), stream));
     }
     let aggregated = aggregate(stream).await;
     if let Some(error) = aggregated.error {
@@ -301,6 +320,21 @@ async fn completions(
 
 async fn not_found() -> ApiError {
     ApiError::not_found("unknown endpoint; try GET /health or POST /v1/chat/completions")
+}
+
+/// Parse a request body by hand so a bad one gets OpenAI's error envelope.
+///
+/// Axum's own `Json` extractor rejects with a bare 422 and a plain-text body,
+/// which no OpenAI SDK can read; clients expect `{"error": {…}}` with a 400.
+fn parse_body<T: serde::de::DeserializeOwned>(body: Bytes) -> Result<T, ApiError> {
+    serde_json::from_slice(&body).map_err(|source| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            format!("the request body is not valid OpenAI JSON: {source}"),
+            "invalid_request_error",
+        )
+        .with_param("body")
+    })
 }
 
 /// Sampling params from OpenAI fields, on top of the app's small-model defaults.

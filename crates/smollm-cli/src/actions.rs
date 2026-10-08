@@ -563,8 +563,10 @@ pub async fn serve(ctx: &mut Context, args: &ServeArgs) -> Result<()> {
     println!("SmolLLM Studio server listening on {}", handle.base_url());
     println!("  GET  /health                 engine and model status");
     println!("  GET  /v1/models              what this server will answer for");
+    println!("  GET  /v1/models/{{id}}         one model card");
     println!("  POST /v1/chat/completions    streaming and non-streaming");
     println!("  POST /v1/completions         raw completion");
+    println!("  GET  /v1/engine/metrics      tokens per second, request counts");
     print_examples(&config, config.default_model_id.as_deref().unwrap_or(""));
     println!("Press ctrl-c to stop.");
 
@@ -579,7 +581,12 @@ pub async fn serve(ctx: &mut Context, args: &ServeArgs) -> Result<()> {
 }
 
 fn print_examples(config: &ServerConfig, model_id: &str) {
+    println!("health:\n{}\n", server::health_example(config));
     println!("\ncurl:\n{}\n", server::curl_example(config, model_id));
+    println!(
+        "\nStreaming (server-sent events):\n{}\n",
+        server::curl_stream_example(config, model_id)
+    );
     println!(
         "Python (OpenAI SDK):\n{}",
         server::python_example(config, model_id)

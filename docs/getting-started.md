@@ -78,8 +78,9 @@ equally tuned, and *Follow the system* tracks the OS setting live.
 
 ## First API call
 
-**Server** → **Start**. The page then shows the base URL, a live request log and
-copyable curl/Python snippets already filled in with your port and model.
+**Server** → **Start**. The page then shows the base URL, the model ids the
+server actually offers on `/v1/models`, a live request log and copyable
+curl, streaming and Python snippets already filled in with your port and model.
 
 ```bash
 curl http://127.0.0.1:8080/v1/chat/completions \
@@ -87,8 +88,9 @@ curl http://127.0.0.1:8080/v1/chat/completions \
   -d '{"model":"qwen2.5-0.5b-instruct-gguf","messages":[{"role":"user","content":"hi"}]}'
 ```
 
-The first request may take a moment: if nothing is resident, the server loads
-the default model before answering. Full reference in [api.md](api.md).
+Requests are served by the model resident in the engine; nothing is downloaded
+or loaded on demand. Load one first — **Chat** does this for you — or ask for
+`/health` to see what is there. Full reference in [api.md](api.md).
 
 ## Benchmarks
 

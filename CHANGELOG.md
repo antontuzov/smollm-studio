@@ -42,9 +42,46 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   restart-on-`200`, provenance mismatch, header and checksum validation, joining
   an in-flight transfer and the retry state. `HfClient` gained a private
   `endpoint` so the whole path is testable without touching the internet.
+- **`stream_options.include_usage` is honoured.** A streamed chat now ends with
+  `data:` chunks a strict OpenAI client expects: content deltas carry no `usage`,
+  and when the flag is set one final `chat.completion.chunk` arrives whose
+  `choices` is `[]` and which holds the token counts, just before `[DONE]`.
+  Previously the field was parsed and dropped. Every SSE response also sets
+  `Cache-Control: no-cache, no-transform` and `x-accel-buffering: no`, because a
+  proxy that buffers turns a token stream into a wait.
+- **The Server page says what the server offers.** `ServerStatus` carries
+  `servedModels` — the exact ids `/v1/models` answers for, resident model first —
+  shown as chips, and `get_server_examples` gained `health` (a `curl -s …/health`)
+  and `curlStream` (the same call with `stream: true`, built for `curl -N`), which
+  become a third tab. The snippets no longer wait on a loaded model. `smollm serve`
+  prints the same set, and the CLI's endpoint list names `/v1/models/{id}` and
+  `/v1/engine/metrics` too.
+- **Two more over-the-socket HTTP tests**, for the part-list `content` form and for
+  `include_usage`, taking `crates/smollm-server` to eleven tests that run against
+  a real listener rather than a mocked request.
 
 ### Fixed
 
+- **`messages[].content` now accepts what OpenAI sends.** A list of typed parts
+  (`[{"type":"text",…}]`) and `null` on an assistant tool-call turn were both
+  hard `422`s, which broke SDK clients that had done nothing wrong. Text parts are
+  joined in order and non-text parts are dropped — the engines behind this server
+  generate from text — and the flattening lives in the wire types, so the app's own
+  `ChatMessage` stays a plain string pair.
+- **A malformed body answers in OpenAI's envelope.** Bodies that are not valid
+  JSON were rejected by Axum's `Json` extractor: a bare `422` with a plain-text
+  body no SDK can parse. They are parsed by hand now, so the reply is a `400` with
+  `{"error":{"type":"invalid_request_error","param":"body",…}}`.
+- **The mock quoted the chat template, not the question.** `MockEngine` echoes the
+  user's line back into its canned answer, but with the app's rendered prompt the
+  last line is a template marker, so every demo answer began *"Short answer about
+  &lt;assistant&gt;"*. ChatML, `<user>`-style, Gemma and Granite scaffolding and the
+  bare role words are now stripped first.
+- **The docs promised lazy loading the server does not do.** `docs/api.md` and
+  `docs/getting-started.md` both claimed a request would load the default model
+  when nothing was resident. It does not: the routes never touch the downloader, and
+  the request fails with a `404` that says so. The copy now matches, including the
+  Server page's own notes.
 - **A resume could not produce a corrupt model any more.** The old transfer sent
   a `Range` header and then appended whatever came back. A server that ignores
   `Range` and answers `200` with the whole file would therefore be written onto
