@@ -2,16 +2,16 @@
 //!
 //! One trait, several backends. The app only ever talks to [`Engine`], so
 //! MockEngine can be swapped for a real llama.cpp or Candle adapter without any
-//! UI, server or download code changing. llama.cpp and Candle are feature
-//! flagged and ship as clearly marked adapters: the first release must not
-//! block on native bindings.
+//! UI, server or download code changing. llama.cpp links for real behind the
+//! `llama-cpp` feature; Candle is still a clearly marked adapter. Mock stays the
+//! default so the app runs on any machine, with or without a native toolchain.
 
 use std::pin::Pin;
 
 use futures::Stream;
 use serde::{Deserialize, Serialize};
 use smollm_core::chat::{
-    EngineMetrics, GenToken, GenerationRequest, LoadModelRequest, ModelHandle,
+    ChatMessage, EngineMetrics, GenToken, GenerationRequest, LoadModelRequest, ModelHandle,
 };
 use smollm_core::{AppError, AppResult};
 
@@ -28,6 +28,21 @@ pub mod mock;
 pub use benchmark::{run as run_benchmark, BenchmarkConfig, BenchmarkProgress, BenchmarkResult};
 pub use gguf_meta::GgufMetadataEngine;
 pub use manager::EngineManager;
+
+/// The accelerator the linked engine says it can offload weights to.
+///
+/// `smollm-hardware` deliberately measures a machine without a GPU runtime, so
+/// the honest answer about offload has to come from the engine that would do it.
+/// Apps merge this into [`smollm_core::system::HardwareReport`]; a build with no
+/// native engine has nothing to ask and reports `None`.
+#[cfg(feature = "llama-cpp")]
+pub use llama::largest_accelerator;
+
+#[cfg(not(feature = "llama-cpp"))]
+#[must_use]
+pub fn largest_accelerator() -> Option<smollm_core::system::Accelerator> {
+    None
+}
 
 /// A stream of generated tokens. Errors are terminal: the consumer stops.
 pub type TokenStream = Pin<Box<dyn Stream<Item = AppResult<GenToken>> + Send>>;
@@ -52,6 +67,20 @@ pub trait Engine: Send + Sync {
     /// Start a generation. The returned stream must honour
     /// [`GenerationRequest::cancel`] promptly.
     fn generate(&mut self, request: GenerationRequest) -> AppResult<TokenStream>;
+
+    /// Flatten a transcript into the prompt this engine's model expects.
+    ///
+    /// Engines that ship a real template (llama.cpp reads it out of the GGUF
+    /// file) answer here; `None` means the manager falls back to the
+    /// architecture table in `smollm_core::model::ModelFamily`.
+    fn render_chat_prompt(
+        &self,
+        system_prompt: Option<&str>,
+        messages: &[ChatMessage],
+    ) -> Option<String> {
+        let _ = (system_prompt, messages);
+        None
+    }
 
     /// Tokenise text the way this engine's model would.
     fn tokenize(&self, text: &str) -> AppResult<Vec<u32>>;
@@ -110,9 +139,10 @@ impl EngineKind {
 
     /// Whether a compiled engine has the native code it needs to run.
     ///
-    /// `mock` and the metadata reader need none. The `llama-cpp` and `candle`
-    /// features compile an adapter without linking a library, so being compiled
-    /// is not the same as being able to answer a request.
+    /// `mock` and the metadata reader need none. `llama-cpp` builds llama.cpp
+    /// itself, so once compiled it is linked too. The `candle` feature compiles
+    /// an adapter without a library behind it, so being compiled there is not
+    /// the same as being able to answer a request.
     pub fn is_linked(self) -> bool {
         match self {
             Self::Mock => cfg!(feature = "mock"),
@@ -223,34 +253,47 @@ mod tests {
     }
 
     #[test]
-    fn an_unlinked_adapter_is_never_chosen_over_mock() {
-        // `--features llama-cpp` compiles an adapter, it does not link llama.cpp.
-        // Callers pick an engine with `is_available`, so treating "compiled" as
-        // "usable" would hand the app a stub that fails every load.
-        assert!(!EngineKind::LlamaCpp.is_available());
-        assert!(!EngineKind::Candle.is_available());
-
-        let expected = if EngineKind::LlamaCpp.compiled() {
-            "adapter only"
-        } else {
-            "not compiled"
-        };
-        let reason = EngineKind::LlamaCpp
-            .unavailability()
-            .expect("an unavailable engine explains itself");
-        assert!(reason.contains(expected), "{reason}");
-
+    fn only_an_engine_this_build_can_run_is_offered_as_available() {
         assert_eq!(
             EngineKind::Mock.is_available(),
             cfg!(feature = "mock"),
             "Mock is what keeps the app running"
         );
+        assert!(EngineKind::GgufMetadata.is_available());
+
+        // `llama-cpp` links the real library, so the answer tracks the feature.
+        #[cfg(feature = "llama-cpp")]
+        assert!(EngineKind::LlamaCpp.is_available());
+        #[cfg(not(feature = "llama-cpp"))]
+        assert!(!EngineKind::LlamaCpp.is_available());
+
+        // Candle is an adapter on both sides of its flag, so it never displaces
+        // an engine the app can actually generate with.
+        assert!(!EngineKind::Candle.is_available());
+        assert_eq!(
+            EngineKind::all().first(),
+            Some(&EngineKind::Mock),
+            "available engines sort first and Mock is one of them"
+        );
+    }
+
+    #[test]
+    fn an_engine_that_cannot_run_explains_why() {
+        let reason = EngineKind::Candle
+            .unavailability()
+            .expect("an unavailable engine explains itself");
+        let expected = if EngineKind::Candle.compiled() {
+            "adapter only"
+        } else {
+            "not compiled"
+        };
+        assert!(reason.contains(expected), "{reason}");
     }
 
     #[test]
     fn metadata_engine_is_always_available() {
         assert!(EngineKind::GgufMetadata.is_available());
-        let error = EngineKind::LlamaCpp.unavailable_error();
+        let error = EngineKind::Candle.unavailable_error();
         assert!(matches!(error, AppError::UnsupportedBackend(_)));
     }
 }

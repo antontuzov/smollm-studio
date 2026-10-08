@@ -63,7 +63,10 @@ impl Context {
         if let Some(report) = &self.hardware {
             return report.clone();
         }
-        let report = smollm_hardware::detect_in(&self.paths);
+        let mut report = smollm_hardware::detect_in(&self.paths);
+        // Which accelerator the engine would really offload to is the engine's
+        // answer, not ours; a build without a native engine has none to give.
+        report.accelerator = smollm_engine::largest_accelerator();
         self.hardware = Some(report.clone());
         report
     }
@@ -123,6 +126,21 @@ pub fn hardware(ctx: &mut Context, json: bool) -> Result<()> {
                 )
             ),
             ("GPU", gpu),
+            (
+                "Offload",
+                report_data.accelerator.as_ref().map_or_else(
+                    || "the linked engine names no accelerator".to_string(),
+                    |device| {
+                        format!(
+                            "{} on {} · {:.1} GB usable, {:.1} GB free",
+                            device.description,
+                            device.backend,
+                            device.usable_memory_gb,
+                            device.free_memory_gb
+                        )
+                    },
+                ),
+            ),
             (
                 "Disk",
                 format!(
@@ -744,7 +762,12 @@ fn build_load_request(
         let size_mb = std::fs::metadata(&path)
             .map(|meta| meta.len() / 1_000_000)
             .unwrap_or(0);
-        let needed = estimate_ram_gb(size_mb, options.context_length);
+        // The header we just read knows what the weights and the KV cache
+        // really need; the size heuristic is only the fallback.
+        let needed = metadata.as_ref().map_or_else(
+            || estimate_ram_gb(size_mb, options.context_length),
+            |metadata| metadata.memory_fit_gb(options.context_length, size_mb),
+        );
         let available = ctx.hardware().available_ram_gb;
         if needed > available {
             eprintln!(

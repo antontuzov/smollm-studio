@@ -10,6 +10,15 @@ export type Backend = "cpu" | "metal" | "cuda" | "vulkan" | "mock";
 
 export type Platform = "macos" | "windows" | "linux" | "other";
 
+/** An accelerator the linked inference engine reports it can really use. */
+export interface Accelerator {
+  name: string;
+  description: string;
+  backend: string;
+  usableMemoryGb: number;
+  freeMemoryGb: number;
+}
+
 export interface HardwareReport {
   platform: Platform;
   arch: string;
@@ -25,6 +34,8 @@ export interface HardwareReport {
   gpuName: string;
   diskFreeGb: number;
   modelVolumeFreeGb: number;
+  /** `null` when no linked engine can name a device to offload to. */
+  accelerator: Accelerator | null;
 }
 
 export interface DoctorReport {
@@ -136,6 +147,10 @@ export interface ModelMetadata {
   vocabSize?: number | null;
   blockCount?: number | null;
   embeddingLength?: number | null;
+  headCount?: number | null;
+  headCountKv?: number | null;
+  /** Bytes of tensor data in this file, measured from its own header. */
+  weightBytes?: number | null;
   nTensors: number;
   ggufVersion: number;
 }

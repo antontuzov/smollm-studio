@@ -316,6 +316,7 @@ mod tests {
             gpu_name: "Apple M3".to_string(),
             disk_free_gb: 200.0,
             model_volume_free_gb: 200.0,
+            accelerator: None,
         }
     }
 

@@ -146,16 +146,13 @@ run → `mock`, with a warning recorded in the log and surfaced in the UI.
 | --- | --- | --- |
 | `mock` | `mock` (default) | Streams tokens so the whole pipeline is testable. **Simulated output.** |
 | `gguf-metadata` | always on | Reads headers; no generation. |
-| `llama-cpp` | `llama-cpp` | Adapter seam with a `TODO`. Needs vendored llama.cpp sources and a C/C++ toolchain. |
+| `llama-cpp` | `llama-cpp` | **Real inference.** Loads the GGUF through llama.cpp: its own tokenizer and chat template, tokens streamed from a dedicated decode thread, cancellation checked between tokens, and metrics naming the device that actually ran. Compiles llama.cpp from the sources the `llama-cpp-2` bindings vendor, so it needs cmake and a C/C++ toolchain. |
 | `candle` | `candle` | Adapter seam with a `TODO`. Experimental. |
 
 `EngineKind` keeps those two questions apart on purpose: `compiled()` says the
-feature is in the binary, `is_available()` also requires a library to have been
-linked, and nothing selects an engine that fails the second test. Enabling
-`--features llama-cpp` today therefore changes which code exists, not which
-engine answers — constructing that adapter directly is what reports
-`unsupported_backend` ("no native library is linked yet"), rather than the app
-pretending to run inference. See
+feature is in the binary, `is_available()` also requires the native code to be
+there, and nothing selects an engine that fails the second test. With
+`--features llama-cpp` the llama.cpp engine passes both and is what answers;
+without it, and for `candle` in any build, the app stays on MockEngine and says
+so rather than pretending to run inference. See
 [`crates/smollm-engine/src/llama.rs`](../crates/smollm-engine/src/llama.rs).
-That is the honest state of this project, and the single most useful contribution
-would be to replace it.

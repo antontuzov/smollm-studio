@@ -29,6 +29,23 @@ impl Backend {
     pub fn is_accelerated(self) -> bool {
         !matches!(self, Self::Cpu | Self::Mock)
     }
+
+    /// Name a llama.cpp compute backend, so an engine can report the device it
+    /// actually got instead of the one the settings asked for.
+    ///
+    /// llama.cpp registers its Metal backend as `MTL`, not `Metal`. It also
+    /// builds OpenCL, SYCL and vendor-specific backends this app does not
+    /// target; an unrecognised name is reported as CPU, and the engine logs the
+    /// name it saw rather than inventing a match.
+    #[must_use]
+    pub fn from_ggml_backend(name: &str) -> Self {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "metal" | "mtl" => Self::Metal,
+            "cuda" => Self::Cuda,
+            "vulkan" => Self::Vulkan,
+            _ => Self::Cpu,
+        }
+    }
 }
 
 /// Operating system label used in the doctor report.
@@ -75,6 +92,26 @@ impl Platform {
     }
 }
 
+/// An accelerator the inference library itself says it can use.
+///
+/// Reported by llama.cpp rather than guessed from the platform: it is the
+/// memory the library is *willing* to hand to the device, which on Apple
+/// Silicon is a capped slice of unified RAM, not the whole of it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Accelerator {
+    /// Device name inside the library, e.g. `MTL0`.
+    pub name: String,
+    /// Human readable device, e.g. `Apple M1`.
+    pub description: String,
+    /// Backend the device belongs to, e.g. `MTL`, `CUDA`, `Vulkan`.
+    pub backend: String,
+    /// GiB the library will let this device hold weights in.
+    pub usable_memory_gb: f64,
+    /// GiB of that budget still free right now.
+    pub free_memory_gb: f64,
+}
+
 /// Everything we could measure about the machine.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -95,6 +132,9 @@ pub struct HardwareReport {
     pub disk_free_gb: f64,
     /// Free space on the volume holding the model directory.
     pub model_volume_free_gb: f64,
+    /// What the linked engine can offload to, `None` until the engine has been
+    /// asked (a build without a native engine never can).
+    pub accelerator: Option<Accelerator>,
 }
 
 /// Actionable summary the Home page renders.
@@ -283,6 +323,33 @@ mod tests {
             };
             assert!(config.validate().is_ok(), "host {host:?} should be allowed");
         }
+    }
+
+    #[test]
+    fn backend_maps_llama_cpp_names_onto_supported_devices() {
+        // llama.cpp spells Metal `MTL` in its own device registry.
+        assert_eq!(Backend::from_ggml_backend("MTL"), Backend::Metal);
+        assert_eq!(Backend::from_ggml_backend("Metal"), Backend::Metal);
+        assert_eq!(Backend::from_ggml_backend("CUDA"), Backend::Cuda);
+        assert_eq!(Backend::from_ggml_backend(" vulkan "), Backend::Vulkan);
+        assert_eq!(Backend::from_ggml_backend("CPU"), Backend::Cpu);
+        // Not a target this app builds for: named in the log, never guessed at.
+        assert_eq!(Backend::from_ggml_backend("OpenCL"), Backend::Cpu);
+    }
+
+    #[test]
+    fn accelerator_reports_the_names_the_frontend_reads() {
+        let json = serde_json::to_value(Accelerator {
+            name: "MTL0".to_string(),
+            description: "Apple M1".to_string(),
+            backend: "MTL".to_string(),
+            usable_memory_gb: 11.8,
+            free_memory_gb: 11.7,
+        })
+        .expect("serialises");
+        assert_eq!(json["description"], "Apple M1");
+        assert_eq!(json["usableMemoryGb"], 11.8);
+        assert_eq!(json["freeMemoryGb"], 11.7);
     }
 
     #[test]

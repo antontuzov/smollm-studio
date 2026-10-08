@@ -1,10 +1,11 @@
 //! Minimal, dependency-free GGUF metadata reader.
 //!
 //! Supports the GGUF v2/v3 header: key/value metadata plus tensor-info
-//! parsing for a parameter count. Tensor *data* is never read, so probing a
-//! multi-gigabyte file stays cheap.
+//! parsing for a parameter count and for where the tensor data begins, which
+//! turns a file size into an exact weight size. Tensor *data* is never read, so
+//! probing a multi-gigabyte file stays cheap.
 
-use std::io::{BufReader, Cursor, Read};
+use std::io::{BufReader, Cursor, Read, Seek, SeekFrom};
 use std::path::Path;
 
 use serde_json::{Map, Value};
@@ -18,6 +19,9 @@ const MAX_TENSORS: u64 = 200_000;
 const MAX_STRING_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_ARRAY_ENTRIES: u64 = 260_000;
 const MAX_TENSOR_RANK: u32 = 8;
+/// `general.alignment` default from the GGUF spec: tensor data starts on a
+/// 32-byte boundary after the header.
+const DEFAULT_ALIGNMENT: u64 = 32;
 /// Vocabulary arrays are huge and useless in the UI; they collapse to a marker.
 const MAX_STORED_ARRAY_ITEMS: usize = 512;
 
@@ -38,10 +42,57 @@ mod type_id {
     pub const FLOAT64: u32 = 12;
 }
 
-/// `general.file_type` values as written by llama.cpp conversion scripts.
-const FILE_TYPES: [&str; 18] = [
-    "F32", "F16", "BF16", "Q4_0", "Q4_1", "Q5_0", "Q5_1", "Q8_0", "Q2_K", "Q3_K_S", "Q3_K_M",
-    "Q3_K_L", "Q4_K_S", "Q4_K_M", "Q5_K_S", "Q5_K_M", "Q6_K", "IQ4_NL",
+/// Quantisation names indexed by `general.file_type`, which is llama.cpp's
+/// `llama_ftype` *enum*, not a dense list.
+///
+/// Position matters: the enum keeps holes where formats were removed (4-6,
+/// 33-35), so a compact table silently shifts every name after them and labels
+/// a Q4_K_M file as Q5_K_M. `None` marks those gaps — an index with no name is
+/// reported as unknown rather than guessed at. Values match llama.cpp's
+/// `include/llama.h`; newer types beyond the end simply read as unknown.
+const FILE_TYPES: [Option<&str>; 42] = [
+    Some("F32"),       // 0
+    Some("F16"),       // 1
+    Some("Q4_0"),      // 2
+    Some("Q4_1"),      // 3
+    None,              // 4  removed
+    None,              // 5  removed
+    None,              // 6  removed
+    Some("Q8_0"),      // 7
+    Some("Q5_0"),      // 8
+    Some("Q5_1"),      // 9
+    Some("Q2_K"),      // 10
+    Some("Q3_K_S"),    // 11
+    Some("Q3_K_M"),    // 12
+    Some("Q3_K_L"),    // 13
+    Some("Q4_K_S"),    // 14
+    Some("Q4_K_M"),    // 15
+    Some("Q5_K_S"),    // 16
+    Some("Q5_K_M"),    // 17
+    Some("Q6_K"),      // 18
+    Some("IQ2_XXS"),   // 19
+    Some("IQ2_XS"),    // 20
+    Some("Q2_K_S"),    // 21
+    Some("IQ3_XS"),    // 22
+    Some("IQ3_XXS"),   // 23
+    Some("IQ1_S"),     // 24
+    Some("IQ4_NL"),    // 25
+    Some("IQ3_S"),     // 26
+    Some("IQ3_M"),     // 27
+    Some("IQ2_S"),     // 28
+    Some("IQ2_M"),     // 29
+    Some("IQ4_XS"),    // 30
+    Some("IQ1_M"),     // 31
+    Some("BF16"),      // 32
+    None,              // 33 removed
+    None,              // 34 removed
+    None,              // 35 removed
+    Some("TQ1_0"),     // 36
+    Some("TQ2_0"),     // 37
+    Some("MXFP4_MOE"), // 38
+    Some("NVFP4"),     // 39
+    Some("Q1_0"),      // 40
+    Some("Q2_0"),      // 41
 ];
 
 /// A parsed GGUF header.
@@ -52,6 +103,12 @@ pub struct GgufHeader {
     pub metadata: Map<String, Value>,
     /// Sum of tensor element counts, when tensor infos were readable.
     pub total_params: Option<u64>,
+    /// First byte of the tensor data section: the header length rounded up to
+    /// `general.alignment`. `None` when the tensor infos could not be read.
+    pub data_start: Option<u64>,
+    /// Size in bytes of the file or buffer the header came from, 0 when the
+    /// caller read through a bare reader that reports no length.
+    pub source_bytes: u64,
 }
 
 impl GgufHeader {
@@ -60,16 +117,26 @@ impl GgufHeader {
         let file = std::fs::File::open(path).map_err(|source| {
             AppError::GgufParse(format!("cannot open {}: {source}", path.display()))
         })?;
+        let source_bytes = file
+            .metadata()
+            .map_err(|source| {
+                AppError::GgufParse(format!("cannot size {}: {source}", path.display()))
+            })?
+            .len();
         let mut reader = BufReader::with_capacity(64 * 1024, file);
-        Self::parse(&mut reader)
+        let mut header = Self::parse(&mut reader)?;
+        header.source_bytes = source_bytes;
+        Ok(header)
     }
 
     /// Parse from an in-memory buffer (tests, fixtures, streamed prefixes).
     pub fn parse_bytes(bytes: &[u8]) -> AppResult<Self> {
-        Self::parse(&mut Cursor::new(bytes))
+        let mut header = Self::parse(&mut Cursor::new(bytes))?;
+        header.source_bytes = bytes.len() as u64;
+        Ok(header)
     }
 
-    pub fn parse<R: Read>(reader: &mut R) -> AppResult<Self> {
+    pub fn parse<R: Read + Seek>(reader: &mut R) -> AppResult<Self> {
         let mut magic = [0u8; 4];
         reader.read_exact(&mut magic)?;
         if &magic != MAGIC {
@@ -100,12 +167,22 @@ impl GgufHeader {
             metadata.insert(key, read_value(reader, 0)?);
         }
 
+        let alignment = metadata
+            .get("general.alignment")
+            .and_then(Value::as_u64)
+            .filter(|bytes| *bytes > 0)
+            .unwrap_or(DEFAULT_ALIGNMENT);
+        let tensors_at = reader.stream_position()?;
+
         // Tensor infos are best effort: some quantised exports pad before them,
         // and metadata is still worth showing even if we cannot count params.
-        let total_params = if n_tensors == 0 || n_tensors > MAX_TENSORS {
-            None
+        let (total_params, data_start) = if n_tensors == 0 || n_tensors > MAX_TENSORS {
+            (None, None)
         } else {
-            read_tensor_params(reader, n_tensors, version).unwrap_or(None)
+            match read_tensor_infos(reader, tensors_at, n_tensors, version, alignment) {
+                Some((params, start)) => (Some(params), Some(start)),
+                None => (None, None),
+            }
         };
 
         Ok(Self {
@@ -113,7 +190,21 @@ impl GgufHeader {
             n_tensors,
             metadata,
             total_params,
+            data_start,
+            source_bytes: 0,
         })
+    }
+
+    /// Bytes the file spends on tensor weights.
+    ///
+    /// Everything after the aligned data start is tensor data, so this is exact
+    /// for a single-file GGUF and needs no table of quantisation block sizes.
+    /// `None` when either end of that range is unknown.
+    #[must_use]
+    pub fn weight_bytes(&self) -> Option<u64> {
+        self.data_start
+            .and_then(|start| self.source_bytes.checked_sub(start))
+            .filter(|bytes| *bytes > 0)
     }
 
     /// Collapse raw key/values into the app's model metadata view.
@@ -126,6 +217,7 @@ impl GgufHeader {
             .get("general.file_type")
             .and_then(Value::as_u64)
             .and_then(|index| FILE_TYPES.get(index as usize).copied())
+            .flatten()
             .map(str::to_string);
 
         let parameter_count = self.total_params.or_else(|| {
@@ -149,6 +241,9 @@ impl GgufHeader {
                 .and_then(Value::as_u64),
             block_count: self.u32(&format!("{prefix}.block_count")),
             embedding_length: self.u32(&format!("{prefix}.embedding_length")),
+            head_count: self.u32(&format!("{prefix}.attention.head_count")),
+            head_count_kv: self.u32(&format!("{prefix}.attention.head_count_kv")),
+            weight_bytes: self.weight_bytes(),
             n_tensors: self.n_tensors,
             gguf_version: self.version,
         }
@@ -182,35 +277,66 @@ fn to_billions(parameters: u64) -> f32 {
     (parameters as f64 / 1e8).round() as f32 / 10.0
 }
 
-fn read_tensor_params<R: Read>(
+fn align_up(value: u64, alignment: u64) -> u64 {
+    let padding = alignment - 1;
+    value.saturating_add(padding) & !padding
+}
+
+/// Count the parameters and locate the tensor data section.
+///
+/// The GGUF spec writes v3 tensor dimensions as uint32 and v2 ones as uint64,
+/// but real v3 exports have been found using uint64 anyway, so the width the
+/// version implies is tried first and the other only if that diverges: a header
+/// whose tensor infos cannot be read has neither a parameter count nor a way to
+/// measure its weights.
+fn read_tensor_infos<R: Read + Seek>(
     reader: &mut R,
+    start: u64,
     n_tensors: u64,
     version: u32,
-) -> AppResult<Option<u64>> {
-    // GGUF v3 narrowed tensor dimensions to uint32; v2 wrote uint64.
+    alignment: u64,
+) -> Option<(u64, u64)> {
+    for wide_dims in [version < 3, version >= 3] {
+        if reader.seek(SeekFrom::Start(start)).is_err() {
+            return None;
+        }
+        if let Ok(total) = read_tensor_params(reader, n_tensors, wide_dims) {
+            let end = reader.stream_position().ok()?;
+            return Some((total, align_up(end, alignment)));
+        }
+    }
+    None
+}
+
+/// Read one tensor info entry per tensor and sum their element counts.
+fn read_tensor_params<R: Read>(reader: &mut R, n_tensors: u64, wide_dims: bool) -> AppResult<u64> {
     let mut total: u64 = 0;
     for _ in 0..n_tensors {
         let _name = read_string(reader)?;
         let n_dims = read_u32(reader)?;
-        if n_dims > MAX_TENSOR_RANK {
+        if n_dims == 0 || n_dims > MAX_TENSOR_RANK {
             return Err(AppError::GgufParse(format!(
                 "implausible tensor rank {n_dims}"
             )));
         }
         let mut elements: u64 = 1;
         for _ in 0..n_dims {
-            let dim = if version >= 3 {
-                u64::from(read_u32(reader)?)
-            } else {
+            let dim = if wide_dims {
                 read_u64(reader)?
+            } else {
+                u64::from(read_u32(reader)?)
             };
+            // A zero-length tensor means the read has diverged from the file.
+            if dim == 0 {
+                return Err(AppError::GgufParse("zero-sized tensor dimension".into()));
+            }
             elements = elements.saturating_mul(dim);
         }
         let _dtype = read_u32(reader)?;
         let _offset = read_u64(reader)?;
         total = total.saturating_add(elements);
     }
-    Ok(Some(total))
+    Ok(total)
 }
 
 /// Read a metadata value, including its leading type byte.
@@ -381,25 +507,92 @@ mod tests {
         out.extend_from_slice(&0u64.to_le_bytes()); // offset
     }
 
-    /// qwen2-style header with 2 tensors totalling 1.5B parameters.
+    /// qwen2-style header with 2 tensors totalling 3B parameters.
     fn sample_bytes() -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(MAGIC);
         out.extend_from_slice(&3u32.to_le_bytes());
         out.extend_from_slice(&2u64.to_le_bytes()); // n_tensors
-        out.extend_from_slice(&6u64.to_le_bytes()); // n_kv
+        out.extend_from_slice(&9u64.to_le_bytes()); // n_kv
 
         push_kv_string(&mut out, "general.architecture", "qwen2");
         push_kv_string(&mut out, "general.name", "Qwen2.5 0.5B Instruct");
         push_kv_u32(&mut out, "qwen2.context_length", 32768);
         push_kv_u32(&mut out, "qwen2.block_count", 24);
-        push_kv_u32(&mut out, "general.file_type", 13); // Q4_K_M
+        push_kv_u32(&mut out, "qwen2.embedding_length", 896);
+        push_kv_u32(&mut out, "qwen2.attention.head_count", 14);
+        push_kv_u32(&mut out, "qwen2.attention.head_count_kv", 2);
+        push_kv_u32(&mut out, "general.file_type", 15); // LLAMA_FTYPE_MOSTLY_Q4_K_M
         push_kv_bool(&mut out, "tokenizer.ggml.add_bos_token", false);
 
         // token_emb: 1500 x 1_000_000, output: 500 x 3_000_000  => 3.0e9 params
         push_tensor(&mut out, "token_embd.weight", &[1500, 1_000_000]);
         push_tensor(&mut out, "output.weight", &[500, 3_000_000]);
         out
+    }
+
+    #[test]
+    fn the_data_section_start_is_measured_not_guessed() {
+        let mut bytes = sample_bytes();
+        let header = GgufHeader::parse_bytes(&bytes).expect("parses");
+        let start = header.data_start.expect("two tensor infos were written");
+        assert_eq!(start % 32, 0, "llama.cpp aligns the tensor data");
+        assert!(
+            start >= bytes.len() as u64,
+            "the fixture stops at the header"
+        );
+        assert_eq!(
+            header.weight_bytes(),
+            None,
+            "a header on its own holds no weights"
+        );
+
+        bytes.resize(usize::try_from(start).unwrap() + 4096, 0);
+        let loaded = GgufHeader::parse_bytes(&bytes).expect("re-parses");
+        assert_eq!(
+            loaded.weight_bytes(),
+            Some(4096),
+            "weights are exactly what follows the data offset"
+        );
+    }
+
+    #[test]
+    fn summary_carries_the_attention_geometry() {
+        let summary = GgufHeader::parse_bytes(&sample_bytes())
+            .expect("parses")
+            .summary();
+        assert_eq!(summary.embedding_length, Some(896));
+        assert_eq!(summary.head_count, Some(14));
+        assert_eq!(summary.head_count_kv, Some(2));
+        assert_eq!(summary.weight_bytes, None, "the fixture has no data");
+    }
+
+    /// Some v3 exports store tensor dimensions as uint64 even though the spec
+    /// reserves that width for v2. Reading one narrowly diverges on a zero-sized
+    /// dimension, and the reader has to notice and retry.
+    #[test]
+    fn reads_v3_headers_that_wrote_wide_tensor_dimensions() {
+        let mut out = Vec::new();
+        out.extend_from_slice(MAGIC);
+        out.extend_from_slice(&3u32.to_le_bytes());
+        out.extend_from_slice(&1u64.to_le_bytes()); // n_tensors
+        out.extend_from_slice(&1u64.to_le_bytes()); // n_kv
+        push_kv_string(&mut out, "general.architecture", "llama");
+
+        push_string(&mut out, "token_embd.weight");
+        out.extend_from_slice(&2u32.to_le_bytes()); // n_dims
+        for dim in [960u64, 49_152] {
+            out.extend_from_slice(&dim.to_le_bytes());
+        }
+        out.extend_from_slice(&8u32.to_le_bytes()); // dtype Q8_0
+        out.extend_from_slice(&0u64.to_le_bytes()); // offset
+
+        let header = GgufHeader::parse_bytes(&out).expect("retries with wide dimensions");
+        assert_eq!(header.total_params, Some(960 * 49_152));
+        assert!(
+            header.data_start.is_some(),
+            "weights cannot be measured without the data offset"
+        );
     }
 
     #[test]
@@ -417,6 +610,22 @@ mod tests {
         assert_eq!(summary.block_count, Some(24));
         assert_eq!(summary.parameters_b, Some(3.0));
         assert_eq!(summary.gguf_version, 3);
+    }
+
+    #[test]
+    fn file_type_names_follow_the_enum_holes() {
+        // 4-6 and 33-35 are formats llama.cpp removed. Reading one has to yield
+        // no name at all, not the name of whatever shifted into that slot.
+        assert_eq!(FILE_TYPES[3], Some("Q4_1"));
+        assert_eq!(FILE_TYPES[4], None);
+        assert_eq!(FILE_TYPES[6], None);
+        assert_eq!(FILE_TYPES[7], Some("Q8_0"));
+        assert_eq!(FILE_TYPES[15], Some("Q4_K_M"));
+        assert_eq!(FILE_TYPES[17], Some("Q5_K_M"));
+        assert_eq!(FILE_TYPES[32], Some("BF16"));
+        assert_eq!(FILE_TYPES[33], None);
+        // LLAMA_FTYPE_GUESSED is 1024, and it is not a quantisation.
+        assert!(FILE_TYPES.get(1024).is_none());
     }
 
     #[test]

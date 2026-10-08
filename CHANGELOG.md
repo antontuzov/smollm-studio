@@ -65,9 +65,67 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   states which of the two is missing, in the sentence every surface shows — CLI
   warning, load toast, `unsupported_backend`. Selection uses `is_available()`, so
   no configuration can pick an engine that only knows how to refuse.
+- **llama.cpp is a real engine.** `--features llama-cpp` now links llama.cpp
+  through the `llama-cpp-2` bindings and answers with actual model output: it
+  loads the GGUF, samples with the app's temperature/top-p/top-k/min-p and
+  penalty settings, honours stop sequences across token boundaries without
+  leaking a marker, and reports tokens per second, prompt and completion counts
+  from the library rather than from a script. Measured on an Apple M1 with Metal
+  and flash attention: 44–65 tok/s on SmolLM2 360M Q4_K_M. Without the feature
+  nothing changes — MockEngine still answers, and still says it is simulated.
+- **Generation runs on a decode worker that can be stopped.** llama.cpp blocks
+  inside its own call stack for the whole reply, so each generation now owns a
+  thread, hands tokens to the async layers over a channel, and checks cancellation
+  between tokens: pressing Stop ends the reply within a token, and a client that
+  goes away — a closed chat stream, a disconnected `curl` — stops the work instead
+  of letting a model write into a vanished socket. The model, backend and context
+  are built on that thread, so nothing borrows across it.
+- **The model's own tokenizer and chat template.** llama.cpp reads the chat
+  template embedded in the file (38 prompt tokens for a two-message chat on
+  SmolLM2, counted by the model's vocabulary), so prompts are no longer rendered
+  from the app's architecture table, and token counts in the UI are real. The
+  table stays as the fallback for engines that ship no template.
+- **Memory fit is measured, not guessed.** A GGUF header now yields the bytes its
+  tensor section actually holds plus `head_count`/`head_count_kv`, so the RAM
+  figure — the load refusal in the app, the pre-run warning in the CLI, the
+  *Needs RAM* line on a model card — comes from the file's own attention geometry
+  instead of a constant per token. Grouped-query models drop notably: SmolLM2 360M
+  at 8K context is 0.9 GB measured against 1.6 GB estimated. A model that is not
+  on disk yet still gets the old heuristic, and the Library page shows the weight
+  bytes it read.
+- **Two questions answered by llama.cpp itself.** Which device the weights really
+  landed on (`metrics.backend` now reports `metal` when the Metal backend ran,
+  `cpu` when it did not, and logs a name this app does not model instead of
+  inventing a match) and how much memory it allows itself there (11.8 GiB of this
+  M1's 16 GiB, its own working-set cap), which `smollm hardware` prints as an
+  `Offload` line and the Home page shows under *This machine*.
+- **llama.cpp logs go through `tracing`.** Its scheduler and graph traces used to
+  print hundreds of lines per generation straight to stderr, past the log file and
+  past every filter; they are routed into the app's own subscriber now, so
+  `RUST_LOG` decides what is shown and the Logs page keeps the rest.
 
 ### Fixed
 
+- **Quant labels are the quant the file actually holds.** `general.file_type` is
+  llama.cpp's `llama_ftype` *enum*, and that enum keeps holes where formats were
+  removed (4–6, 33–35). The table here was a dense list, so every name from
+  index 2 on sat two to six slots early: the bundled `SmolLM2-360M-Instruct-Q4_K_M`
+  (`file_type = 15`) was reported as **Q5_K_M**, and `BF16` — which is 32 — was
+  claimed by index 2. The table is now positional, with the removed values left
+  empty so an unknown index answers "unknown" instead of guessing. Only `F32`,
+  `F16` and `Q8_0` used to be labelled correctly.
+- **GGUF files that store tensor dimensions as `uint64` are readable again.**
+  The spec writes them as `uint32` in v3, but real v3 exports have shipped the
+  wider width anyway; the reader followed the version, diverged on the first
+  tensor and reported no parameter count and no weight size — silently, because
+  tensor infos were best effort. It now tries the width the version implies, then
+  the other, and treats a zero rank or a zero-length dimension as the divergence
+  it is. `SmolLM2-360M-Instruct-Q4_K_M.gguf` reports 361,821,120 parameters and
+  268,803,840 weight bytes, which is what llama.cpp's own tensor offsets say.
+- **A chat that auto-loads a model no longer blocks a worker thread.** The
+  native engine reads hundreds of megabytes and builds GPU kernels, which is
+  minutes of work on a CPU-bound pool if it happens inside an async command. It
+  goes to `spawn_blocking` now, like every other native call.
 - **`messages[].content` now accepts what OpenAI sends.** A list of typed parts
   (`[{"type":"text",…}]`) and `null` on an assistant tool-call turn were both
   hard `422`s, which broke SDK clients that had done nothing wrong. Text parts are

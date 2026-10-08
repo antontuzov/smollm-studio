@@ -35,7 +35,9 @@ SmolLLM Studio is honest about itself, and so is this README.
   resume, SHA-256 and GGUF-header verification, bounded auto-retry on flaky
   networks, cancel and retry buttons, and a live transfer list.
 - GGUF metadata parsing straight from the file header (architecture,
-  quantisation, context length, tensor count, license).
+  quantisation, context length, tensor count, license) and a memory figure
+  measured from that header: the bytes the tensor section really holds, plus a
+  KV cache sized by the model's own attention geometry.
 - The whole UI: eight pages, streaming chat, sampling controls, server page
   with copyable client snippets, benchmarks, log viewer, settings.
 - An OpenAI-compatible HTTP server (`/health`, `/v1/models`, `/v1/models/{id}`,
@@ -43,26 +45,32 @@ SmolLLM Studio is honest about itself, and so is this README.
   `stream: true` over SSE and `stream_options.include_usage`.
 - A command-line twin (`smollm`) that shares every crate with the desktop app.
 
+**Inference: real, but opt-in**
+
+Building with `--features llama-cpp` links llama.cpp (the `llama-cpp-2` bindings
+vendor and compile it, so this needs cmake and a C/C++ toolchain) and you get
+genuine generation: the model's own tokenizer and chat template, tokens streamed
+from a dedicated decode thread, stop sequences and cancellation honoured per
+token, and metrics naming the device that actually ran — Metal on Apple Silicon,
+CUDA or Vulkan where llama.cpp found one. Layer offloading and thread counts come
+from llama.cpp's own device list, not from what the settings hoped for.
+
 **Not wired up yet**
 
-- **Real inference.** The default build ships `MockEngine`, which produces
-  token-by-token output that *looks* like generation so the entire streaming,
-  cancellation and metrics path can be exercised end to end. It does not read
-  weights, and what it says is not the model's answer. Every screen that can
-  show it labels it **simulated**.
-- Native backends live behind two opt-in Cargo features, `llama-cpp` and
-  `candle`, and both are clearly marked adapters with a `TODO` at the seam
-  rather than working inference. Enabling a flag does not download llama.cpp, and
-  does not change which engine answers: an engine is only chosen if this build
-  can actually run it, so Mock stays the one that replies until a library is
-  linked. That is deliberate — the app must always start.
+- **The default build still simulates.** Without that feature the app ships
+  `MockEngine`, which produces token-by-token output that *looks* like
+  generation so the entire streaming, cancellation and metrics path can be
+  exercised end to end on any machine. It does not read weights, and what it
+  says is not the model's answer. Every screen that can show it labels it
+  **simulated**, and the engine is only chosen if this build can actually run
+  it — Mock answers rather than the app failing to start. That is deliberate.
+- **`candle` is an adapter without a runner.** The feature compiles the seam and
+  clearly reports that it cannot serve a request, so it never displaces Mock.
 
-We deliberately did not rewrite llama.cpp. Instead the engine is an
-abstraction (`Engine` + `EngineManager`) with one integration point per
-backend, so wiring a real one is a contained change:
-[crates/smollm-engine/src/llama.rs](crates/smollm-engine/src/llama.rs). Until
-that happens, treat this as a very good front end, catalog, downloader, server
-and UI in search of an inference library.
+We deliberately did not rewrite llama.cpp. The engine is an abstraction
+(`Engine` + `EngineManager`) with one integration point per backend, so each
+library is a contained change:
+[crates/smollm-engine/src/llama.rs](crates/smollm-engine/src/llama.rs).
 
 ---
 
@@ -102,8 +110,9 @@ and UI in search of an inference library.
 4. Press **Load**, then **Chat**.
 
 The first load is a cold read from disk, so it is slower than the numbers you
-see afterwards. In this version that conversation is simulated — see the next
-section before you trust any answer.
+see afterwards. If the app was installed from a plain release build, that
+conversation is simulated — read "Inference: real, but opt-in" above before you
+trust an answer.
 
 Prefer the terminal?
 
@@ -144,6 +153,20 @@ pnpm tauri dev    # starts Vite on :1420 and the native window
 
 `pnpm dev` alone gives you the UI in a browser with every command failing into
 its error state — handy for styling, useless for data.
+
+To run real weights, ask for the native engine. It compiles llama.cpp from the
+sources the `llama-cpp-2` bindings vendor, so cmake and a C/C++ toolchain have to
+be there:
+
+```bash
+cargo build -p smollm-cli --features llama-cpp
+cd desktop && pnpm tauri dev --features llama-cpp
+
+smollm hardware            # the "Offload" line names llama.cpp's own device
+```
+
+Without that feature every engine call lands on MockEngine, and the app labels
+its numbers simulated.
 
 Release bundles:
 
@@ -210,9 +233,11 @@ Weights are estimated as `file size + KV cache + ~350 MB of runtime`, and only
 | 16 GB | up to 3B–4B | Room for longer prompts and a second app |
 | 32 GB+ | 4B and beyond | This app still caps its advice at 4B on purpose |
 
-Disk: 5 GB free holds a normal working set of three or four models; downloading all 13 catalog entries is about 18 GB. GPU: not required. Apple Silicon and
-CUDA both help once a native backend is wired in; today the mock engine runs on
-CPU everywhere. Details in [docs/hardware.md](docs/hardware.md).
+Disk: 5 GB free holds a normal working set of three or four models; downloading
+all 13 catalog entries is about 18 GB. GPU: not required. Apple Silicon and CUDA
+help when the app is built with `--features llama-cpp` — llama.cpp then offloads
+layers and the app reports the device it got; the mock engine runs on CPU
+everywhere. Details in [docs/hardware.md](docs/hardware.md).
 
 ## OpenAI-compatible API
 
@@ -253,7 +278,8 @@ port and model filled in. Full reference:
 ```
 crates/
   smollm-core       domain types, errors, config, paths, GGUF metadata
-  smollm-engine     InferenceEngine trait, MockEngine, GGUF reader, benchmark
+  smollm-engine     InferenceEngine trait, llama.cpp and Mock engines, GGUF
+                    reader, benchmark, device probe
   smollm-models     catalog, Hugging Face resolver, resumable downloads, library
   smollm-hardware   sysinfo detection, GPU probing, the doctor
   smollm-server     Axum OpenAI-compatible API
@@ -267,15 +293,15 @@ desktop/
 
 In order, and none of it promised:
 
-1. **Real inference** — a llama.cpp adapter behind the `llama-cpp` feature,
-   with the mock engine kept for tests and demos. This is the whole point.
-2. Token-by-token context pressure warnings, and KV-cache quantisation.
-3. Chat history persistence and prompt templates per model family.
-4. A GGUF conversion/import helper for local files not in the catalog.
-5. Auto-update via the Tauri updater plugin, replacing today's "a newer release
+1. Token-by-token context pressure warnings, and KV-cache quantisation.
+2. Chat history persistence and prompt templates per model family.
+3. A GGUF conversion/import helper for local files not in the catalog.
+4. Auto-update via the Tauri updater plugin, replacing today's "a newer release
    exists" notice.
-6. More catalog coverage: multilingual, code-tuned and vision-capable small
+5. More catalog coverage: multilingual, code-tuned and vision-capable small
    models, each verified the same way.
+6. Signed, notarised macOS and Windows bundles built with `llama-cpp`, so the
+   real engine reaches an install rather than a source build.
 
 ## License
 
@@ -292,7 +318,8 @@ Issues and pull requests are welcome, especially for item 1 above. Start with
 
 - [llama.cpp](https://github.com/ggml-org/llama.cpp) and the
   [GGUF format](https://huggingface.co/docs/hub/gguf) — the reason small models
-  run on laptops at all. This app does not contain llama.cpp code.
+  run on laptops at all. This repository contains no llama.cpp source; the
+  `llama-cpp` feature pulls it in through the bindings at build time.
 - [Hugging Face](https://huggingface.co) — hosts every model file this app can
   download, and publishes SmolLM2, Qwen, Llama, Gemma, Phi and DeepSeek
   distills.

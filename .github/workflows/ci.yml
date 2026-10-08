@@ -32,11 +32,53 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
 
-      - name: Clippy (all targets, all features)
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Tests
         run: cargo test --all
+
+  # llama.cpp is compiled from source by the `llama-cpp` feature, so it needs
+  # cmake and a C++ toolchain and takes real minutes. It is checked here, on the
+  # two platforms whose runners are guaranteed to have that, rather than making
+  # every job above wait for a native build. Windows is deliberately not in this
+  # matrix yet: see docs/models.md.
+  native-engine:
+    name: Native engine (llama.cpp)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup default stable
+        shell: bash
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cmake (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake
+
+      - name: Clippy (engine)
+        run: cargo clippy -p smollm-engine --all-targets --features llama-cpp -- -D warnings
+
+      - name: Clippy (CLI)
+        run: cargo clippy -p smollm-cli --all-targets --features llama-cpp -- -D warnings
+
+      - name: Engine tests
+        run: cargo test -p smollm-engine --features llama-cpp
+
+      # The desktop shell needs Tauri's system libraries, which macOS has and a
+      # plain Ubuntu runner does not.
+      - name: Clippy (desktop shell)
+        if: runner.os == 'macOS'
+        run: cargo clippy -p smollm-studio-desktop --all-targets --features llama-cpp -- -D warnings
 
   frontend:
     name: Frontend

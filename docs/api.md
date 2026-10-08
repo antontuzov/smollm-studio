@@ -147,7 +147,10 @@ nothing". Each entry is also enriched with `downloaded`, `estimatedRamGb`,
 `fitsMemory`, `downloading`, `downloadPercent` and the newest transfer's
 `downloadState` plus `downloadError` (`null` when the model was never pulled) —
 which is how the Models page can put a Retry button on the card itself instead of
-sending you to the Transfers list. `catalog_facets` returns the distinct values behind those dropdowns,
+sending you to the Transfers list. For a model that is already on disk
+`estimatedRamGb` is measured from that file's header (its tensor bytes plus a KV
+cache sized by its own attention geometry); before a download there is nothing to
+read, so it falls back to the size heuristic. `catalog_facets` returns the distinct values behind those dropdowns,
 with counts, derived from the loaded catalog including any local overlay.
 
 `start_chat_stream` loads the model on demand, so the chat page can send to a

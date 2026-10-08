@@ -64,6 +64,13 @@ walkdir = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 clap = { version = "4", features = ["derive"] }
 
+# --- native inference (opt-in feature only: it builds the vendored llama.cpp) ---
+# Never a default, because it needs cmake plus a C/C++ toolchain this repo
+# cannot assume. On Apple machines llama.cpp's own build also adds its Metal
+# backend when the toolchain can compile it, so GPU availability is asked of the
+# library at runtime rather than promised by a feature.
+llama-cpp-2 = { version = "0.1.159", default-features = false }
+
 # --- desktop ---
 tauri = { version = "2", features = [] }
 tauri-build = { version = "2", features = [] }

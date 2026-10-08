@@ -4,7 +4,9 @@ Three things to know before you start:
 
 1. Everything lives on your machine — no account, no key, no telemetry.
 2. The default build answers with a **simulated** engine. The UI, downloads,
-   server and benchmarks are real; the words are not. See
+   server and benchmarks are real; the words are not. Real weights need a build
+   with `--features llama-cpp`, which compiles llama.cpp and so needs cmake and a
+   C/C++ toolchain. See
    [README — what is real](../README.md#please-read-this-first-what-is-real-and-what-is-a-seam).
 3. The app is a 1024×640 minimum window. Below that, the layout starts
    stacking.

@@ -14,6 +14,11 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build.workspace = true
 
+[features]
+# Native inference in the desktop shell. Off by default: it compiles llama.cpp,
+# so a plain `tauri build` keeps working on a machine with no native toolchain.
+llama-cpp = ["smollm-engine/llama-cpp"]
+
 [dependencies]
 tauri.workspace = true
 smollm-core.workspace = true

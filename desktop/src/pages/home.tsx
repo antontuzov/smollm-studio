@@ -1,4 +1,14 @@
-import { Boxes, Cpu, Gauge, HardDrive, MemoryStick, MessageSquare, Play, Server } from "lucide-react";
+import {
+  Boxes,
+  Cpu,
+  Gauge,
+  HardDrive,
+  MemoryStick,
+  MessageSquare,
+  Play,
+  Server,
+  Zap,
+} from "lucide-react";
 
 import { loadModel, pullModel } from "@/lib/actions";
 import { formatGigabytes, formatMegabytes, formatRate } from "@/lib/format";
@@ -67,9 +77,10 @@ export function HomePage() {
               generates deterministic text instead of running weights.
             </p>
             <p>
-              The <span className="font-mono">llama-cpp</span> feature compiles an adapter for real
-              GGUF inference, but no native library is linked into this build yet, so switching the
-              flag on alone does not change these numbers. Everything else in the app behaves the
+              Real GGUF inference comes from the <span className="font-mono">llama-cpp</span> engine,
+              which this binary does not contain: it is built with{" "}
+              <span className="font-mono">--features llama-cpp</span> and needs cmake plus a C/C++
+              toolchain. Everything else — downloads, the library, the local server — behaves the
               same, so this is the right place to learn the interface.
             </p>
           </Note>
@@ -119,6 +130,15 @@ export function HomePage() {
                       icon={MemoryStick}
                       label="Graphics"
                       value={hardware.data?.gpuName || "integrated / none detected"}
+                    />
+                    <Line
+                      icon={Zap}
+                      label="Offload"
+                      value={
+                        hardware.data?.accelerator
+                          ? `${hardware.data.accelerator.description} on ${hardware.data.accelerator.backend} · ${formatGigabytes(hardware.data.accelerator.usableMemoryGb)} budget`
+                          : "no engine in this build names a device"
+                      }
                     />
                     <Line
                       icon={HardDrive}
@@ -203,7 +223,8 @@ export function HomePage() {
                                 <p className="truncate text-xs font-medium">{model.displayName}</p>
                                 <p className="truncate text-[11px] text-muted-foreground">
                                   {model.parametersB}B · {model.quantization} ·{" "}
-                                  {formatMegabytes(model.sizeMb)} · ~{model.recommendedRamGb} GB RAM
+                                  {formatMegabytes(model.sizeMb)} ·{" "}
+                                  ~{formatGigabytes(model.estimatedRamGb)} RAM
                                 </p>
                               </div>
                               {model.downloaded ? (

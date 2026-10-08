@@ -220,6 +220,9 @@ function LocalModelRow({
         {metadata.contextLength ? <Badge>{metadata.contextLength} context</Badge> : null}
         {metadata.trainType ? <Badge tone="info">{metadata.trainType}</Badge> : null}
         {metadata.blockCount ? <Badge tone="neutral">{metadata.blockCount} blocks</Badge> : null}
+        {metadata.weightBytes ? (
+          <Badge tone="neutral">{formatBytes(metadata.weightBytes)} of weights</Badge>
+        ) : null}
         {metadata.vocabSize ? <Badge tone="neutral">{metadata.vocabSize.toLocaleString()} vocab</Badge> : null}
         <Badge tone={model.catalogId ? "success" : "neutral"}>
           {model.catalogId ? "from catalog" : "manual file"}

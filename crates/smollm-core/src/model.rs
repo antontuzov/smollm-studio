@@ -214,6 +214,13 @@ pub fn estimate_ram_gb(size_mb: u64, context_length: u32) -> f64 {
     (weights + kv_cache_gb + 0.35).max(weights)
 }
 
+/// Bytes in a gibibyte: RAM availability is measured in GiB, so memory fit is
+/// too.
+const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+/// llama.cpp's compute buffers, allocator slack and the app itself, on top of
+/// weights plus KV cache.
+const RUNTIME_ALLOWANCE_GB: f64 = 0.35;
+
 /// Metadata read from a local GGUF file (or a catalog entry).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -229,8 +236,62 @@ pub struct ModelMetadata {
     pub vocab_size: Option<u64>,
     pub block_count: Option<u32>,
     pub embedding_length: Option<u32>,
+    /// Attention heads per layer, from `{arch}.attention.head_count`.
+    pub head_count: Option<u32>,
+    /// Key/value heads per layer, from `{arch}.attention.head_count_kv`.
+    pub head_count_kv: Option<u32>,
+    /// Bytes of tensor weights in the file, measured from its own header rather
+    /// than estimated from the quantisation name.
+    pub weight_bytes: Option<u64>,
     pub n_tensors: u64,
     pub gguf_version: u32,
+}
+
+impl ModelMetadata {
+    /// Resident memory this model needs at `context_length`, in GiB.
+    ///
+    /// Built from the file's own numbers: the weight bytes its header reports,
+    /// and a KV cache sized by the real attention geometry — K and V, one f16
+    /// row per position, per layer and per key/value head. Anything the header
+    /// did not say falls back to the coarse [`estimate_ram_gb`] heuristic, so a
+    /// catalog entry without a local file still gets a sane figure.
+    #[must_use]
+    pub fn memory_fit_gb(&self, context_length: u32, size_mb: u64) -> f64 {
+        match self.measured_fit_gb(context_length) {
+            Some(measured) => measured,
+            None => estimate_ram_gb(size_mb, context_length),
+        }
+    }
+
+    fn measured_fit_gb(&self, context_length: u32) -> Option<f64> {
+        let weights = self.weight_bytes? as f64 / GIB;
+        let kv_cache = self.kv_cache_gb(context_length)?;
+        Some(weights + kv_cache + RUNTIME_ALLOWANCE_GB)
+    }
+
+    /// GiB the KV cache occupies at this context length, or `None` when the
+    /// header does not describe the attention layers well enough to size it.
+    #[must_use]
+    pub fn kv_cache_gb(&self, context_length: u32) -> Option<f64> {
+        let layers = u64::from(self.block_count?);
+        let heads = u64::from(self.head_count?);
+        // Models without grouped-query attention repeat the query head count.
+        let kv_heads = u64::from(self.head_count_kv.unwrap_or(self.head_count?));
+        let embedding = u64::from(self.embedding_length?);
+        // GGUF stores no head_dim; llama.cpp derives it from the query heads.
+        let head_dim = embedding.checked_div(heads)?;
+        if layers == 0 || kv_heads == 0 || head_dim == 0 {
+            return None;
+        }
+        // Two caches (K and V) of f16 elements, one row per context position.
+        let bytes = 2u64
+            .saturating_mul(u64::from(context_length))
+            .saturating_mul(layers)
+            .saturating_mul(kv_heads)
+            .saturating_mul(head_dim)
+            .saturating_mul(2);
+        Some(bytes as f64 / GIB)
+    }
 }
 
 /// A `.gguf` file found in the local model directory.
@@ -281,6 +342,76 @@ mod tests {
             "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"
         );
         assert!(model.is_small());
+    }
+
+    const MIB: u64 = 1024 * 1024;
+
+    /// Qwen2.5-0.5B: 24 layers, 14 query heads, 2 kv heads, 896 wide.
+    fn qwen2_metadata() -> ModelMetadata {
+        ModelMetadata {
+            block_count: Some(24),
+            embedding_length: Some(896),
+            head_count: Some(14),
+            head_count_kv: Some(2),
+            weight_bytes: Some(350 * MIB),
+            ..ModelMetadata::default()
+        }
+    }
+
+    #[test]
+    fn kv_cache_is_sized_by_the_real_attention_geometry() {
+        let metadata = qwen2_metadata();
+        // 2 caches x 4096 positions x 24 layers x 2 kv heads x 64 head_dim x 2 B
+        // = 48 MiB, which is what llama.cpp reserves for this model at 4K and
+        // what the flat per-token heuristic misses.
+        let expected = 48.0 * MIB as f64 / (1024.0 * MIB as f64);
+        assert!((metadata.kv_cache_gb(4096).expect("sized") - expected).abs() < 1e-9);
+        assert!(
+            metadata.kv_cache_gb(8192).unwrap() > metadata.kv_cache_gb(4096).unwrap(),
+            "more context means a bigger cache"
+        );
+    }
+
+    #[test]
+    fn a_model_without_grouped_query_attention_sizes_every_head() {
+        let mut metadata = qwen2_metadata();
+        metadata.head_count_kv = None;
+        let shared = metadata.kv_cache_gb(1024).expect("sized");
+        metadata.head_count_kv = Some(14);
+        assert_eq!(
+            Some(shared),
+            Some(metadata.kv_cache_gb(1024).expect("sized")),
+            "no kv head count must not shrink the cache"
+        );
+    }
+
+    #[test]
+    fn memory_fit_prefers_measured_weights_and_falls_back_to_the_heuristic() {
+        let metadata = qwen2_metadata();
+        let fit = metadata.memory_fit_gb(4096, 400);
+        let weights = 350.0 * MIB as f64 / (1024.0 * MIB as f64);
+        let kv_cache = metadata.kv_cache_gb(4096).expect("sized");
+        assert!(
+            (fit - (weights + kv_cache + 0.35)).abs() < 1e-9,
+            "measured weights plus cache plus a runtime allowance"
+        );
+
+        // No header: the catalog heuristic is what the app has to offer.
+        let mut blind = qwen2_metadata();
+        blind.weight_bytes = None;
+        assert_eq!(
+            blind.memory_fit_gb(4096, 400),
+            estimate_ram_gb(400, 4096),
+            "an unmeasurable file must still be sized"
+        );
+
+        // Geometry missing: same fallback, not a confident wrong number.
+        let mut no_heads = qwen2_metadata();
+        no_heads.head_count = None;
+        assert_eq!(
+            no_heads.memory_fit_gb(4096, 400),
+            estimate_ram_gb(400, 4096)
+        );
     }
 
     #[test]

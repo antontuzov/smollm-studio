@@ -1,6 +1,6 @@
 import { Ban, Download, MessageSquare, Play, RotateCw } from "lucide-react";
 
-import { formatMegabytes } from "@/lib/format";
+import { formatGigabytes, formatMegabytes } from "@/lib/format";
 import {
   capitalize,
   downloadStateLabel,
@@ -76,7 +76,7 @@ export function ModelCard({
       <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
         <Fact label="Download" value={formatMegabytes(model.sizeMb)} />
         <Fact label="Context" value={`${model.contextLength} tokens`} />
-        <Fact label="Needs RAM" value={`~${model.recommendedRamGb} GB`} />
+        <Fact label="Needs RAM" value={`~${formatGigabytes(model.estimatedRamGb)}`} />
         <Fact label="Speed" value={model.speed} />
         <Fact label="Architecture" value={model.architecture} mono />
         <Fact label="License" value={model.license} />
@@ -95,8 +95,10 @@ export function ModelCard({
 
       {!model.fitsMemory ? (
         <Note tone="warning" className="mt-3">
-          This model is estimated to need about {model.recommendedRamGb} GB of RAM. Loading it may
-          fail or push this machine into swap.
+          {model.downloaded
+            ? `This file's own header says it needs about ${formatGigabytes(model.estimatedRamGb)} of RAM at ${model.contextLength} context.`
+            : `This model is estimated to need about ${formatGigabytes(model.estimatedRamGb)} of RAM.`}{" "}
+          Loading it may fail or push this machine into swap.
         </Note>
       ) : null}
 

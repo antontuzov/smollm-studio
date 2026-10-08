@@ -11,6 +11,11 @@ repository.workspace = true
 name = "smollm"
 path = "src/main.rs"
 
+[features]
+# Native inference in the CLI: `--engine llama-cpp` only works in a build that
+# asks for this, because it compiles llama.cpp itself.
+llama-cpp = ["smollm-engine/llama-cpp"]
+
 [dependencies]
 smollm-core.workspace = true
 smollm-engine.workspace = true

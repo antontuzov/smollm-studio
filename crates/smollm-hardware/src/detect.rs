@@ -74,6 +74,9 @@ pub fn detect_in(paths: &AppPaths) -> HardwareReport {
         gpu_name,
         disk_free_gb: disk_free_gb.unwrap_or(model_volume_free_gb),
         model_volume_free_gb,
+        // Only an engine that links a GPU runtime can name its device budget,
+        // and this crate deliberately does not; the app fills this in.
+        accelerator: None,
     }
 }
 

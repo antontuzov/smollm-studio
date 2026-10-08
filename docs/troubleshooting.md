@@ -7,12 +7,17 @@ you have to ask it.
 
 ## The output is nonsense
 
-Expected, and not a bug. The default build has no inference library: `mock`
-streams plausible text so the whole pipeline can be exercised. Every place that
+Expected in a default build, and not a bug: it has no inference library, so
+`mock` streams plausible text to exercise the whole pipeline. Every place that
 shows it labels it **simulated** — the top-bar pill, the chat stats, the load
 toast, the Server page, the benchmark results.
 
-Real generation needs a native backend wired into the `llama-cpp` feature. See
+If you built with `--features llama-cpp` and still see that label, the feature did
+not reach the binary you are running: `pnpm tauri dev --features llama-cpp` for
+the window, `cargo build -p smollm-cli --features llama-cpp` for the CLI, and
+`smollm hardware` should then print an `Offload` line naming a device. Real
+answers also need a model that is actually on disk — a simulated engine never
+reads weights. See
 [models.md — backends](models.md#backends).
 
 ## `model_not_downloaded`
@@ -54,9 +59,12 @@ space, or point the model folder at a larger volume in Settings.
 
 ## `insufficient_memory`
 
-The estimate said no. Cheapest fixes in order: lower the context length (the KV
-cache dominates), pick a smaller quantisation, close browsers, then pick a
-smaller model. [hardware.md](hardware.md) has the arithmetic.
+The estimate said no. For a model already on disk the number comes from its own
+header — the bytes the tensor section holds plus a KV cache sized by the model's
+real attention geometry — so lowering the context length changes it immediately.
+Cheapest fixes in order: lower the context length (the KV cache dominates), pick a
+smaller quantisation, close browsers, then pick a smaller model.
+[hardware.md](hardware.md) has the arithmetic.
 
 ## `engine_load_failed`
 
@@ -66,9 +74,11 @@ Re-download rather than trusting the file.
 
 ## `unsupported_backend`
 
-Some engine was asked to do what this binary cannot: the `llama-cpp` and `candle`
-cargo features compile adapters that answer with this note until a native library
-is linked into them, and the GGUF metadata reader refuses to generate at all.
+Some engine was asked to do what this binary cannot. The `candle` cargo feature
+compiles an adapter that answers with this note until a runner is linked into it,
+and the GGUF metadata reader refuses to generate at all. llama.cpp is the one
+adapter that is complete: build with `--features llama-cpp` and it loads GGUF
+files for real.
 
 Nothing picks such an engine for you. Requesting Metal or CUDA on a build that
 cannot run it resolves to MockEngine and adds a warning saying which engine

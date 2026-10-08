@@ -5,6 +5,7 @@
 //! serialises to `{ code, message, detail }` so the frontend can show a friendly
 //! sentence while the Logs page keeps the technical text.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -102,16 +103,30 @@ where
 
 #[tauri::command]
 pub async fn detect_hardware(state: Shared<'_>) -> AppResult<HardwareReport> {
-    let report = run_blocking(smollm_hardware::detect).await?;
+    let report = run_blocking(detect_with_accelerator).await?;
     state.store_hardware(report.clone());
     tracing::info!(
         target: "app",
         platform = report.platform.label(),
         ram_gb = report.total_ram_gb,
         cores = report.logical_cores,
+        accelerator = report.accelerator.as_ref().map(|device| device.name.clone()).unwrap_or_else(|| "none".to_string()),
         "hardware detected"
     );
     Ok(report)
+}
+
+/// Measure the machine, then ask the linked engine which accelerator it can
+/// really offload to.
+///
+/// The device budget is llama.cpp's own question to answer — it is smaller than
+/// system RAM even on unified Apple Silicon — but asking it initialises the
+/// library, so this belongs on the blocking pool, not the main thread. A build
+/// without a native engine answers `None` at once.
+fn detect_with_accelerator() -> HardwareReport {
+    let mut report = smollm_hardware::detect();
+    report.accelerator = smollm_engine::largest_accelerator();
+    report
 }
 
 #[tauri::command]
@@ -141,7 +156,7 @@ pub async fn get_doctor_report(state: Shared<'_>) -> AppResult<DoctorReport> {
     let hardware = match state.cached_hardware() {
         Some(report) => report,
         None => {
-            let report = run_blocking(smollm_hardware::detect).await?;
+            let report = run_blocking(detect_with_accelerator).await?;
             state.store_hardware(report.clone());
             report
         }
@@ -228,11 +243,15 @@ pub async fn list_catalog_models(
     run_blocking(move || {
         let models = state.catalog.filter(&filters);
         let library = state.library();
-        let on_disk: Vec<String> = library
-            .scan(&state.catalog)
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|model| model.catalog_id)
+        let locals = library.scan(&state.catalog).unwrap_or_default();
+        let measured: HashMap<&str, (u64, &ModelMetadata)> = locals
+            .iter()
+            .filter_map(|local| {
+                Some((
+                    local.catalog_id.as_deref()?,
+                    (local.size_bytes / 1_000_000, &local.metadata),
+                ))
+            })
             .collect();
         let tasks = state
             .downloads()
@@ -249,9 +268,15 @@ pub async fn list_catalog_models(
                     .iter()
                     .filter(|task| task.model_id == model.id)
                     .max_by_key(|task| task.started_ms);
-                let estimated = model.estimated_ram_gb(model.context_length);
+                // A file that is already here has a header saying what its
+                // weights and KV cache really cost; the size heuristic only
+                // stands in for models that have not been downloaded yet.
+                let estimated = measured.get(model.id.as_str()).map_or_else(
+                    || model.estimated_ram_gb(model.context_length),
+                    |(size_mb, metadata)| metadata.memory_fit_gb(model.context_length, *size_mb),
+                );
                 CatalogEntry {
-                    downloaded: on_disk.contains(&model.id),
+                    downloaded: measured.contains_key(model.id.as_str()),
                     estimated_ram_gb: estimated,
                     fits_memory: estimated <= usable_ram,
                     downloading: task.is_some_and(|task| task.state.is_active()),
@@ -442,7 +467,11 @@ pub async fn start_chat_stream(
     };
     if !requested_model.is_empty() && !already_loaded {
         // Chat should just work: load what the user asked for, then generate.
-        load_into_engine(&state, &requested_model, None)?;
+        // A native load reads hundreds of MB and builds GPU kernels, so it goes
+        // to the blocking pool rather than occupying an async worker thread.
+        let owned = Arc::clone(&state);
+        let model = requested_model.clone();
+        run_blocking(move || load_into_engine(&owned, &model, None)).await??;
     }
 
     let request_id = request.request_id.clone();
@@ -509,9 +538,11 @@ fn load_into_engine(
     let options = merge_options(options, &settings);
     let size_mb = model_size_mb(descriptor.as_ref(), &path, on_disk);
 
-    refuse_when_ram_is_clearly_short(state, size_mb, options.context_length)?;
-
+    // Read the file before deciding: its header says what the weights and the
+    // KV cache really cost, which a size heuristic cannot.
     let metadata = build_metadata(state, descriptor.as_ref(), &path, on_disk, &settings);
+    refuse_when_ram_is_clearly_short(state, metadata.as_ref(), size_mb, options.context_length)?;
+
     let request = LoadModelRequest {
         model_id: id.to_string(),
         display_name: descriptor
@@ -557,8 +588,13 @@ fn model_size_mb(descriptor: Option<&ModelDescriptor>, path: &Path, on_disk: boo
 }
 
 /// The spec asks the app to refuse a load the machine clearly cannot serve.
+///
+/// A readable GGUF header wins over the heuristic: weight bytes measured from
+/// the file itself, plus a KV cache sized by the model's real attention
+/// geometry. `size_mb` only feeds the fallback estimate.
 fn refuse_when_ram_is_clearly_short(
     state: &Arc<AppState>,
+    metadata: Option<&ModelMetadata>,
     size_mb: u64,
     context_length: u32,
 ) -> AppResult<()> {
@@ -570,7 +606,10 @@ fn refuse_when_ram_is_clearly_short(
         // Nothing measured yet: never block a load on a guess.
         None => return Ok(()),
     };
-    let needed = estimate_ram_gb(size_mb, context_length);
+    let needed = metadata.map_or_else(
+        || estimate_ram_gb(size_mb, context_length),
+        |metadata| metadata.memory_fit_gb(context_length, size_mb),
+    );
     let available = hardware.available_ram_gb;
     if needed > available * 0.95 {
         return Err(AppError::InsufficientMemory {
@@ -1072,7 +1111,7 @@ pub async fn export_diagnostics(app: AppHandle, state: Shared<'_>) -> AppResult<
     let logs = state.logs.snapshot();
     let hardware = match state.cached_hardware() {
         Some(report) => report,
-        None => run_blocking(smollm_hardware::detect).await?,
+        None => run_blocking(detect_with_accelerator).await?,
     };
     let server_status = if state.server_is_running() {
         state

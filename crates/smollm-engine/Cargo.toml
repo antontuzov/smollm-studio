@@ -10,9 +10,13 @@ repository.workspace = true
 [features]
 default = ["mock"]
 mock = []
-# Native llama.cpp integration is intentionally opt-in: enabling the flag
-# requires the vendored llama.cpp sources + a C/C++ toolchain (see docs/models.md).
-llama-cpp = []
+# Real llama.cpp inference: this flag pulls in the bindings, which vendor and
+# build the C++ library, so it needs cmake plus a C/C++ toolchain and cannot be
+# a default. Without it the crate stays pure Rust, which is what CI and every
+# shipped build use. On Apple machines llama.cpp's own build adds the Metal
+# backend when the toolchain can compile it; the engine asks the library at
+# runtime whether offload is available, so the answer is never guessed.
+llama-cpp = ["dep:llama-cpp-2"]
 # Pure-Rust Candle backend, experimental.
 candle = []
 
@@ -25,6 +29,7 @@ tracing.workspace = true
 tokio.workspace = true
 futures.workspace = true
 uuid.workspace = true
+llama-cpp-2 = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = "3"

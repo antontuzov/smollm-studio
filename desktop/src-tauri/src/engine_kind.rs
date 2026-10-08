@@ -3,8 +3,8 @@
 //! SmolLLM Studio ships with MockEngine enabled everywhere. llama.cpp and Candle
 //! are cargo features (and, for llama.cpp, a native toolchain), so a user who
 //! picks Metal on a build without those bindings must be told the truth rather
-//! than quietly shown simulated numbers. The features compile adapter code but
-//! link no library, so `is_available` — not `compiled` — is what decides here.
+//! than quietly shown simulated numbers. `is_available` — compiled *and* able to
+//! run — is what decides here, never `compiled` alone.
 
 use smollm_core::system::{Backend, HardwareReport};
 use smollm_engine::EngineKind;
@@ -80,15 +80,22 @@ mod tests {
     }
 
     #[test]
-    fn a_compiled_but_unlinked_adapter_never_displaces_mock() {
-        // Building with `--features llama-cpp` compiles the adapter without
-        // linking llama.cpp. Resolution must still land on an engine that can
-        // answer a load, otherwise the app starts and then fails at once.
-        if EngineKind::LlamaCpp.is_linked() {
-            return;
+    fn an_engine_that_cannot_serve_never_displaces_mock() {
+        // Whatever this binary was built with, an accelerated request has to land
+        // on an engine that can answer it, or the app starts and then fails.
+        for backend in [Backend::Metal, Backend::Cuda, Backend::Vulkan] {
+            assert!(kind_for_backend(backend).is_available());
         }
-        assert_eq!(kind_for_backend(Backend::Metal), EngineKind::Mock);
-        assert_eq!(kind_for_backend(Backend::Cuda), EngineKind::Mock);
+        // `--features llama-cpp` links llama.cpp, so it answers; without the
+        // feature Mock does, and nothing in between pretends otherwise.
+        assert_eq!(
+            kind_for_backend(Backend::Metal),
+            if EngineKind::LlamaCpp.is_available() {
+                EngineKind::LlamaCpp
+            } else {
+                EngineKind::Mock
+            }
+        );
     }
 
     #[test]
@@ -109,15 +116,18 @@ mod tests {
         assert!(warning.contains("mock"), "{warning}");
         assert!(warning.contains("llama-cpp"), "{warning}");
         assert!(warning.contains("simulated"), "{warning}");
-        let expected = if EngineKind::LlamaCpp.compiled() {
-            "adapter only"
-        } else {
-            "was not compiled"
-        };
-        assert!(
-            warning.contains(expected),
-            "{warning} must name the real cause"
-        );
+        if !EngineKind::LlamaCpp.is_available() {
+            // The sentence has to name why this build cannot run the weights.
+            let expected = if EngineKind::LlamaCpp.compiled() {
+                "adapter only"
+            } else {
+                "was not compiled"
+            };
+            assert!(
+                warning.contains(expected),
+                "{warning} must name the real cause"
+            );
+        }
     }
 
     #[test]

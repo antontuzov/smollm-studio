@@ -232,9 +232,9 @@ export function ChatPage() {
         <Note tone="warning" icon={Gauge}>
           <p>
             These tokens came from the mock engine, so the wording is deterministic filler and the
-            speed is a modelled number. Nothing in this build links a runtime that reads weights:
-            llama.cpp has to be compiled and linked into the{" "}
-            <span className="font-mono">llama-cpp</span> feature before any of this is measured.
+            speed is a modelled number. This binary carries no engine that reads weights; build it
+            with <span className="font-mono">--features llama-cpp</span> to run a real model, whose
+            own tokenizer, chat template and device the numbers then describe.
           </p>
         </Note>
       ) : null}

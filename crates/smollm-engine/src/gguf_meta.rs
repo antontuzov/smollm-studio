@@ -132,7 +132,7 @@ impl Engine for GgufMetadataEngine {
 
 /// The model's own context ceiling wins unless the user asked for something
 /// smaller, so the UI never promises more than the file can do.
-fn pick_context(from_file: Option<u32>, options: &LoadModelOptions) -> u32 {
+pub(crate) fn pick_context(from_file: Option<u32>, options: &LoadModelOptions) -> u32 {
     let requested = options.context_length.max(1);
     match from_file {
         Some(max) if max > 0 => requested.min(max),
@@ -141,7 +141,7 @@ fn pick_context(from_file: Option<u32>, options: &LoadModelOptions) -> u32 {
 }
 
 /// Fill gaps in the GGUF-derived metadata with catalog values.
-fn merge_metadata(
+pub(crate) fn merge_metadata(
     target: &mut smollm_core::model::ModelMetadata,
     fallback: &smollm_core::model::ModelMetadata,
 ) {
@@ -157,6 +157,9 @@ fn merge_metadata(
         vocab_size,
         block_count,
         embedding_length,
+        head_count,
+        head_count_kv,
+        weight_bytes,
         n_tensors,
         gguf_version,
     } = target;
@@ -194,7 +197,15 @@ fn merge_metadata(
     if embedding_length.is_none() {
         *embedding_length = fallback.embedding_length;
     }
-    let _ = (n_tensors, gguf_version);
+    if head_count.is_none() {
+        *head_count = fallback.head_count;
+    }
+    if head_count_kv.is_none() {
+        *head_count_kv = fallback.head_count_kv;
+    }
+    // A catalog entry cannot know what the tensor section of a local file
+    // weighs, so a missing measurement stays missing rather than guessed.
+    let _ = (weight_bytes, n_tensors, gguf_version);
 }
 
 #[cfg(test)]

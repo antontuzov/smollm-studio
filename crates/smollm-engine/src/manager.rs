@@ -194,9 +194,20 @@ impl EngineManager {
     }
 
     /// Flatten a transcript into the prompt text this model expects.
+    ///
+    /// A native engine that knows the model's own chat template wins over the
+    /// architecture table, because the file's template is the real thing.
     pub fn render_prompt(&self, request: &ChatRequest) -> String {
-        self.family
-            .render_prompt(request.system_prompt.as_deref(), &request.messages)
+        let messages = &request.messages;
+        match self
+            .engine
+            .render_chat_prompt(request.system_prompt.as_deref(), messages)
+        {
+            Some(prompt) => prompt,
+            None => self
+                .family
+                .render_prompt(request.system_prompt.as_deref(), messages),
+        }
     }
 
     /// The prompt family in use, so the UI can explain why a model was prompted
