@@ -198,6 +198,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Gemma files are readable, so their downloads survive.** The GGUF reader
+  capped array lengths at 260,000 on the reasoning that no vocabulary is
+  bigger, and Gemma 3's is 262,144 — both its `tokenizer.ggml.tokens` and its
+  `scores` array. The header check therefore failed on a file that is perfectly
+  fine, which discarded a completed 720 MB download as "not a readable GGUF
+  model" and left both Gemma catalog entries unusable. The cap is 1,048,576
+  now: it exists to stop a corrupt count making the reader loop, not to hold
+  items, since vocabulary arrays already collapse to a truncation marker past
+  their first 512 entries. Pinned by a test that reads a 262,144-element array,
+  and checked against the real `gemma-3-1b-it-qat-Q4_0.gguf` header (version 3,
+  340 tensors, 39 metadata keys) on 2026-10-09.
 - **Downloads work again, after two faults that hid each other.**
   `HfClient::resolve_url` put `resolve` before the repository —
   `https://huggingface.co/resolve/{repo}/…`, which is not a path the hub serves —

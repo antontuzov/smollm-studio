@@ -17,7 +17,12 @@ const MAGIC: &[u8; 4] = b"GGUF";
 const MAX_KV_PAIRS: u64 = 200_000;
 const MAX_TENSORS: u64 = 200_000;
 const MAX_STRING_BYTES: u64 = 8 * 1024 * 1024;
-const MAX_ARRAY_ENTRIES: u64 = 260_000;
+/// Bounds how far a corrupt count can make the reader loop; items past
+/// `MAX_STORED_ARRAY_ITEMS` are never held, so a large real vocabulary costs
+/// nothing but reads. Gemma 3 ships 262,144 tokens, and a cap set at "bigger
+/// than any vocabulary" made every Gemma file unreadable, so it sits an order
+/// of magnitude above that instead.
+const MAX_ARRAY_ENTRIES: u64 = 1_048_576;
 const MAX_TENSOR_RANK: u32 = 8;
 /// `general.alignment` default from the GGUF spec: tensor data starts on a
 /// 32-byte boundary after the header.
@@ -732,6 +737,33 @@ mod tests {
         };
         assert_eq!(object["truncated"], Value::Bool(true));
         assert_eq!(object["count"], Value::from(600u64));
+    }
+
+    /// Gemma 3 has 262,144 tokens, and `tokenizer.ggml.scores` is that long too.
+    /// A cap set at "bigger than any vocabulary" was 260,000, so every Gemma
+    /// file in the catalog failed its own header check and a finished download
+    /// was discarded as "not a readable GGUF model".
+    #[test]
+    fn reads_a_gemma_sized_token_array() {
+        const VOCAB: usize = 262_144;
+        let mut out = Vec::new();
+        out.extend_from_slice(MAGIC);
+        out.extend_from_slice(&3u32.to_le_bytes());
+        out.extend_from_slice(&0u64.to_le_bytes());
+        out.extend_from_slice(&1u64.to_le_bytes());
+        push_string(&mut out, "tokenizer.ggml.scores");
+        out.extend_from_slice(&type_id::ARRAY.to_le_bytes());
+        out.extend_from_slice(&type_id::FLOAT32.to_le_bytes());
+        out.extend_from_slice(&(VOCAB as u64).to_le_bytes());
+        for index in 0..VOCAB {
+            out.extend_from_slice(&(index as f32).to_le_bytes());
+        }
+
+        let header = GgufHeader::parse_bytes(&out).expect("a real vocabulary is not corruption");
+        let Value::Object(object) = &header.metadata["tokenizer.ggml.scores"] else {
+            panic!("expected a truncation marker, got {:?}", header.metadata);
+        };
+        assert_eq!(object["count"], Value::from(VOCAB as u64));
     }
 
     #[test]
