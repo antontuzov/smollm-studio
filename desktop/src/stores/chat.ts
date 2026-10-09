@@ -52,6 +52,9 @@ interface ChatState {
   systemPrompt: string;
   preset: string;
   params: SamplingParams | null;
+  /** `null` until the saved chat defaults have been read; `[]` means the user
+   *  genuinely has no stop sequences. */
+  stops: string[] | null;
   requestId: string | null;
   streaming: boolean;
   stats: StreamStats | null;
@@ -61,6 +64,7 @@ interface ChatState {
   setSystemPrompt: (value: string) => void;
   setPreset: (preset: string, params: SamplingParams) => void;
   setParams: (params: SamplingParams) => void;
+  setStops: (stops: string[]) => void;
   /** Append the user message and the empty assistant turn the stream fills. */
   beginStream: (
     userMessage: string,
@@ -98,6 +102,7 @@ export const useChat = create<ChatState>((set, get) => ({
   systemPrompt: "You are a concise, honest assistant running locally on this machine.",
   preset: "balanced",
   params: null,
+  stops: null,
   requestId: null,
   streaming: false,
   stats: null,
@@ -107,6 +112,7 @@ export const useChat = create<ChatState>((set, get) => ({
   setSystemPrompt: (value) => set({ systemPrompt: value }),
   setPreset: (preset, params) => set({ preset, params }),
   setParams: (params) => set({ params, preset: "custom" }),
+  setStops: (stops) => set({ stops }),
 
   beginStream: (userMessage, requestId, assistantId, modelId) =>
     set((state) => {

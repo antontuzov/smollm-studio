@@ -14,8 +14,8 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use smollm_core::chat::{
-    approx_token_count, ChatRequest, EngineMetrics, LoadModelOptions, LoadModelRequest,
-    LoadModelResponse, SamplingParams,
+    approx_token_count, normalize_stop_sequences, ChatRequest, EngineMetrics, LoadModelOptions,
+    LoadModelRequest, LoadModelResponse, SamplingParams,
 };
 use smollm_core::config::Settings;
 use smollm_core::model::{
@@ -514,6 +514,9 @@ pub async fn start_chat_stream(
     if request.request_id.trim().is_empty() {
         request.request_id = format!("chat-{}", uuid::Uuid::new_v4().simple());
     }
+    // The Chat page can hand over an empty row or a repeat; the engines skip
+    // those anyway, so cleaning them here keeps the log describing what ran.
+    request.stop = normalize_stop_sequences(&request.stop)?;
     request.validate()?;
     if request
         .messages
@@ -542,6 +545,10 @@ pub async fn start_chat_stream(
     }
 
     let request_id = request.request_id.clone();
+    // Logged because an answer is only reproducible if the seed that made it is
+    // written down somewhere, and the Logs page is that place.
+    let seed = request.params.seed;
+    let stop_sequences = request.stop.len();
     let (stream, simulated, prompt_tokens) = {
         let mut manager = state.engine()?;
         let prompt_tokens = approx_token_count(&manager.render_prompt(&request));
@@ -552,6 +559,8 @@ pub async fn start_chat_stream(
         target: "app",
         request_id = %request_id,
         prompt_tokens,
+        ?seed,
+        stop_sequences,
         "generation started"
     );
     tasks::pump_tokens(app, request_id.clone(), stream, simulated);
@@ -687,12 +696,17 @@ fn refuse_when_ram_is_clearly_short(
     Ok(())
 }
 
+/// The widest thread count the Settings page may ask for. Past this a machine
+/// has no cores to run them on; `EngineManager::load` still lowers the number to
+/// what the host actually offers.
+const MAX_DECODE_THREADS: u32 = 64;
+
 fn merge_options(options: Option<LoadModelOptions>, settings: &Settings) -> LoadModelOptions {
     let fallback = LoadModelOptions {
         context_length: settings.default_context_length.max(512),
         gpu_layers: settings.default_gpu_layers,
         backend: settings.default_backend,
-        threads: None,
+        threads: settings.default_threads,
     };
     match options {
         // An explicit request wins, except for values the UI leaves at zero.
@@ -708,7 +722,9 @@ fn merge_options(options: Option<LoadModelOptions>, settings: &Settings) -> Load
             } else {
                 given.backend
             },
-            threads: given.threads,
+            // `None` here means "the caller has no opinion", not "use one thread",
+            // so the saved default still applies.
+            threads: given.threads.or(settings.default_threads),
         },
         None => fallback,
     }
@@ -982,7 +998,8 @@ fn load_request_for(
             context_length: config.context_length,
             gpu_layers: config.gpu_layers,
             backend: config.backend,
-            threads: None,
+            // A benchmark measures the machine as the app is configured to use it.
+            threads: settings.default_threads,
         },
         metadata,
     })
@@ -1016,6 +1033,7 @@ pub async fn save_settings(
     state: Shared<'_>,
     settings: Settings,
 ) -> AppResult<Settings> {
+    let mut settings = settings;
     settings.sampling.validate()?;
     if !(512..=32_768).contains(&settings.default_context_length) {
         return Err(AppError::InvalidRequest(format!(
@@ -1023,6 +1041,17 @@ pub async fn save_settings(
             settings.default_context_length
         )));
     }
+    if settings
+        .default_threads
+        .is_some_and(|threads| threads == 0 || threads > MAX_DECODE_THREADS)
+    {
+        return Err(AppError::InvalidRequest(format!(
+            "decode threads must be between 1 and {MAX_DECODE_THREADS}, or unset to use every core"
+        )));
+    }
+    // What the page typed is not what gets stored: blanks and repeats are gone,
+    // so a transcript does not start under a list the engines would ignore.
+    settings.chat_stops = normalize_stop_sequences(&settings.chat_stops)?;
     let config = ServerConfig {
         host: settings.server_host.clone(),
         port: settings.server_port,
@@ -1571,12 +1600,14 @@ mod tests {
             default_context_length: 2048,
             default_gpu_layers: 12,
             default_backend: Backend::Metal,
+            default_threads: Some(2),
             ..Settings::default()
         };
         let calm = merge_options(None, &settings);
         assert_eq!(calm.context_length, 2048);
         assert_eq!(calm.gpu_layers, 12);
         assert_eq!(calm.backend, Backend::Metal);
+        assert_eq!(calm.threads, Some(2), "a chat load uses the saved count");
 
         // An explicit backend of cpu is only overridden by a non-default setting
         // when the caller left the field at its serde default.
@@ -1591,6 +1622,29 @@ mod tests {
         assert_eq!(merged.gpu_layers, 99);
         assert_eq!(merged.backend, Backend::Metal);
         assert_eq!(merged.threads, Some(4));
+
+        // A request that names no count is not a request for one thread.
+        let unstated = LoadModelOptions {
+            context_length: 1024,
+            gpu_layers: 0,
+            backend: Backend::Cpu,
+            threads: None,
+        };
+        assert_eq!(
+            merge_options(Some(unstated), &settings).threads,
+            Some(2),
+            "the default still applies when the caller has no opinion"
+        );
+
+        // A saved default of `None` leaves the engine to decide.
+        let unset = merge_options(
+            None,
+            &Settings {
+                default_threads: None,
+                ..settings.clone()
+            },
+        );
+        assert_eq!(unset.threads, None);
     }
 
     #[test]

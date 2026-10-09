@@ -56,6 +56,8 @@ export function ChatPage() {
   const setPreset = useChat((state) => state.setPreset);
   const params = useChat((state) => state.params);
   const setParams = useChat((state) => state.setParams);
+  const stops = useChat((state) => state.stops);
+  const setStops = useChat((state) => state.setStops);
   const streaming = useChat((state) => state.streaming);
   const requestId = useChat((state) => state.requestId);
   const stats = useChat((state) => state.stats);
@@ -123,16 +125,24 @@ export function ChatPage() {
     void restoreLatestConversation();
   }, []);
 
-  // Seed sampling from the saved chat preset once the presets arrive.
+  // Seed the transcript's sampling and stop sequences from the saved chat
+  // defaults, once. A later settings change must not quietly rewrite parameters
+  // the user has already tuned in this window.
   useEffect(() => {
-    if (params || !presets.data || presets.data.length === 0) {
+    const saved = settings.data;
+    if (!saved || !presets.data || presets.data.length === 0) {
       return;
     }
-    const wanted = presets.data.find((entry) => entry.name === settings.data?.chatPreset)
-      ?? presets.data.find((entry) => entry.name === "balanced")
-      ?? presets.data[0];
-    setPreset(wanted.name, wanted.params);
-  }, [params, presets.data, settings.data, setPreset]);
+    if (!params) {
+      const named = presets.data.find((entry) => entry.name === saved.chatPreset);
+      // The stored values win over the preset's own, so a temperature tuned on
+      // the Settings page survives into a new chat instead of being reset.
+      setPreset(named ? named.name : "custom", saved.sampling);
+    }
+    if (!stops) {
+      setStops(saved.chatStops);
+    }
+  }, [params, stops, presets.data, settings.data, setPreset, setStops]);
 
   const send = useCallback(
     async (text: string, history?: ChatMessage[]) => {
@@ -162,7 +172,7 @@ export function ChatPage() {
         messages: [...previous, { role: "user", content: trimmed }],
         systemPrompt,
         params: params ?? fallbackParams,
-        stop: [],
+        stop: stops ?? [],
       };
       beginStream(trimmed, id, assistantId, modelId);
       setDraft("");
@@ -173,7 +183,7 @@ export function ChatPage() {
         failStream(describeError(error));
       }
     },
-    [beginStream, failStream, modelId, params, setDraft, scrollToBottom, streaming, systemPrompt, turns],
+    [beginStream, failStream, modelId, params, setDraft, scrollToBottom, stops, streaming, systemPrompt, turns],
   );
 
   const stop = useCallback(async () => {
@@ -509,6 +519,8 @@ export function ChatPage() {
                     params={params}
                     onPreset={setPreset}
                     onParams={setParams}
+                    stops={stops ?? []}
+                    onStops={setStops}
                     disabled={streaming}
                   />
                 )}

@@ -46,8 +46,9 @@ SmolLLM Studio is honest about itself, and so is this README.
   both folders share a volume, a proved copy when they do not, and a report of
   what moved and what was left alone. A name the destination already holds is
   never overwritten, and the old folder is never deleted.
-- The whole UI: eight pages, streaming chat, sampling controls, server page
-  with copyable client snippets, benchmarks, log viewer, settings.
+- The whole UI: eight pages, streaming chat with sampling controls — seed and the
+  stop sequences an answer is cut at included — server page with copyable client
+  snippets, benchmarks, log viewer, settings.
 - Conversations kept on disk as one JSON file per chat — list, search across
   titles and answers, rename, export to Markdown or JSON, reopen on launch. An
   answer is written when it finishes, so quitting never loses one.
@@ -63,8 +64,10 @@ vendor and compile it, so this needs cmake and a C/C++ toolchain) and you get
 genuine generation: the model's own tokenizer and chat template, tokens streamed
 from a dedicated decode thread, stop sequences and cancellation honoured per
 token, and metrics naming the device that actually ran — Metal on Apple Silicon,
-CUDA or Vulkan where llama.cpp found one. Layer offloading and thread counts come
-from llama.cpp's own device list, not from what the settings hoped for.
+CUDA or Vulkan where llama.cpp found one. Whether offloading happens at all is
+asked of llama.cpp rather than assumed from the settings, and the decode thread
+count you set is applied — lowered to the cores this machine runs at once, with a
+warning naming both numbers, when it asks for more than the host has.
 
 **Not wired up yet**
 
@@ -141,6 +144,7 @@ smollm models verify                # is every file in the library still whole?
 smollm models move /Volumes/fast/Models   # put the library somewhere else, files and all
 smollm auth status                # which Hugging Face token would be sent, middle hidden
 smollm run qwen2.5-0.5b-instruct-gguf --prompt "Explain GGUF in two sentences"
+smollm run SmolLM2-360M-Instruct-Q4_K_M.gguf --seed 123 --stop "###" --threads 4   # same answer every time
 smollm serve --port 8123            # OpenAI-compatible API on loopback
 ```
 

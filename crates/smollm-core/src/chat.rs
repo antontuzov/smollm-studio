@@ -213,6 +213,52 @@ impl ChatRequest {
     }
 }
 
+/// The most stop sequences a chat may apply to one answer.
+pub const MAX_STOP_SEQUENCES: usize = 8;
+
+/// Longest stop sequence worth storing: anything longer will not appear inside
+/// a generated answer, so it can only be a paste mistake.
+pub const MAX_STOP_LENGTH: usize = 128;
+
+/// Drop blanks and repeats from a stop list typed by a user, and refuse one the
+/// engines would ignore.
+///
+/// A marker containing a newline or a tab is structural — chat templates end on
+/// `\n\n` — so it is kept exactly as typed. Padding around an ordinary marker is
+/// a typing slip, and trimming it means `<|end|>` still matches a bare marker.
+///
+/// Only the chat and settings paths call this. `/v1/chat/completions` answers a
+/// body with sixteen stops the way OpenAI does rather than returning a `400` the
+/// client did not ask for.
+pub fn normalize_stop_sequences(stops: &[String]) -> Result<Vec<String>, crate::AppError> {
+    let mut cleaned: Vec<String> = Vec::new();
+    for stop in stops {
+        let stop = if stop.contains(['\n', '\t']) {
+            stop.clone()
+        } else {
+            stop.trim().to_string()
+        };
+        if stop.is_empty() {
+            continue;
+        }
+        if stop.chars().count() > MAX_STOP_LENGTH {
+            return Err(crate::AppError::InvalidRequest(format!(
+                "a stop sequence is longer than {MAX_STOP_LENGTH} characters, which cannot match inside an answer"
+            )));
+        }
+        if !cleaned.contains(&stop) {
+            cleaned.push(stop);
+        }
+    }
+    if cleaned.len() > MAX_STOP_SEQUENCES {
+        return Err(crate::AppError::InvalidRequest(format!(
+            "a chat applies at most {MAX_STOP_SEQUENCES} stop sequences, got {}",
+            cleaned.len()
+        )));
+    }
+    Ok(cleaned)
+}
+
 /// A streamed piece of assistant output.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -322,4 +368,42 @@ pub struct LoadModelResponse {
     pub engine: String,
     pub simulated: bool,
     pub warnings: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn list(stops: &[&str]) -> Vec<String> {
+        stops.iter().map(|stop| (*stop).to_string()).collect()
+    }
+
+    #[test]
+    fn blanks_and_repeats_leave_a_stop_list_but_a_newline_marker_keeps_its_shape() {
+        let cleaned =
+            normalize_stop_sequences(&list(&["", "   ", "  <|end|>  ", "<|end|>", "\n\n"]))
+                .expect("under the cap");
+        // Padding around a marker goes and a repeat goes, but a marker made of
+        // newlines stays: chat templates end on `\n\n`, and that is a real stop.
+        assert_eq!(cleaned, list(&["<|end|>", "\n\n"]));
+    }
+
+    #[test]
+    fn a_stop_list_the_engines_would_ignore_is_refused_not_quietly_cut() {
+        let too_many = (0..=MAX_STOP_SEQUENCES)
+            .map(|index| format!("stop-{index}"))
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            normalize_stop_sequences(&too_many),
+            Err(crate::AppError::InvalidRequest(_))
+        ));
+
+        let longest = "x".repeat(MAX_STOP_LENGTH);
+        let too_long = format!("{longest}y");
+        assert!(normalize_stop_sequences(std::slice::from_ref(&longest)).is_ok());
+        assert!(matches!(
+            normalize_stop_sequences(std::slice::from_ref(&too_long)),
+            Err(crate::AppError::InvalidRequest(_))
+        ));
+    }
 }

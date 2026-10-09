@@ -30,6 +30,9 @@ pub struct Settings {
     pub default_context_length: u32,
     pub default_gpu_layers: i32,
     pub default_backend: Backend,
+    /// Decode threads for a load that does not name its own. `None` leaves the
+    /// count to the engine, which uses every core it is allowed to see.
+    pub default_threads: Option<u32>,
     pub sampling: SamplingParams,
     pub server_host: String,
     pub server_port: u16,
@@ -39,6 +42,10 @@ pub struct Settings {
     pub auto_update_checks: bool,
     pub onboarding_complete: bool,
     pub chat_preset: String,
+    /// Stop sequences a new transcript starts with, applied by the engine to
+    /// every answer in it. Kept next to `chat_preset` because both are the
+    /// starting state of a conversation rather than of one request.
+    pub chat_stops: Vec<String>,
 }
 
 impl Default for Settings {
@@ -50,12 +57,14 @@ impl Default for Settings {
             default_context_length: 4096,
             default_gpu_layers: -1,
             default_backend: Backend::default(),
+            default_threads: None,
             sampling: SamplingParams::default(),
             server_host: "127.0.0.1".to_string(),
             server_port: 8080,
             auto_update_checks: false,
             onboarding_complete: false,
             chat_preset: "balanced".to_string(),
+            chat_stops: Vec::new(),
         }
     }
 }
@@ -147,6 +156,24 @@ mod tests {
             .expect("defaults when absent");
         assert_eq!(loaded.default_context_length, 4096);
         assert!(!loaded.onboarding_complete);
+    }
+
+    /// Settings written before a field existed have to keep loading: an install
+    /// that predates thread counts and chat stop sequences still starts.
+    #[test]
+    fn an_older_file_fills_the_new_settings_from_defaults() {
+        let path = temp_settings_path("older-version");
+        std::fs::write(
+            &path,
+            r#"{"theme":"dark","defaultContextLength":2048,"sampling":{"temperature":0.3,"seed":null}}"#,
+        )
+        .expect("written");
+
+        let loaded = Settings::load_at(&path).expect("loads without the newer keys");
+        assert_eq!(loaded.default_context_length, 2048);
+        assert_eq!(loaded.default_threads, None);
+        assert!(loaded.chat_stops.is_empty());
+        assert_eq!(loaded.sampling.seed, None);
     }
 
     #[test]

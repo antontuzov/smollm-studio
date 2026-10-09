@@ -60,7 +60,13 @@ you the largest model band that fits. Nothing else needs configuring.
    starting* to the engine name, and the loaded model's name appears next to it.
 3. **Chat** → type. Enter sends, Shift+Enter is a newline, **Stop** abandons the
    current generation mid-stream.
-4. Every finished answer is written to `<root>/sessions` as its own file. The
+4. The sampling panel beside the transcript holds the seed and the stop sequences as
+   well as temperature and friends: a seed makes an answer reproducible and puts that
+   seed on the log line, leaving it empty draws a new one per request, and a stop
+   marker ends the answer before it is shown to you. **Settings → Chat defaults** is
+   what a *new* transcript starts with, and `\n` in a stop marker is a real newline —
+   that is how most chat templates end.
+5. Every finished answer is written to `<root>/sessions` as its own file. The
    **Conversations** panel on the right reopens, renames, searches, exports
    (Markdown or JSON) and deletes them, and the app reopens your last
    conversation when you start it again.

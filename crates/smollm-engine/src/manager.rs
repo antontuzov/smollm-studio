@@ -77,6 +77,7 @@ impl EngineManager {
     }
 
     pub fn load(&mut self, request: LoadModelRequest) -> AppResult<LoadModelResponse> {
+        let mut request = request;
         let mut warnings = Vec::new();
         if request.path.as_os_str().is_empty() {
             warnings.push(
@@ -87,6 +88,11 @@ impl EngineManager {
             warnings.push(format!(
                 "{} engine is simulated: answers are not produced by model weights",
                 self.engine.name()
+            ));
+        }
+        if let Some((wanted, usable)) = cap_threads(&mut request) {
+            warnings.push(format!(
+                "{wanted} decode threads asked for, this machine runs {usable} at once, so the model loads with {usable}"
             ));
         }
 
@@ -215,6 +221,25 @@ impl EngineManager {
     pub fn family(&self) -> ModelFamily {
         self.family
     }
+}
+
+/// Lower a thread count the host cannot fill, returning what was changed.
+///
+/// A model loaded with 64 threads on a 10-core laptop is not faster: the extra
+/// threads start, contend for the same cores and idle. The engine reports the
+/// cap as a warning instead of quietly ignoring the setting the user just chose.
+fn cap_threads(request: &mut LoadModelRequest) -> Option<(u32, u32)> {
+    let wanted = request.options.threads.filter(|count| *count > 0)?;
+    // No opinion from the platform means no cap to apply.
+    let Ok(cores) = std::thread::available_parallelism() else {
+        return None;
+    };
+    let usable = u32::try_from(cores.get()).unwrap_or(u32::MAX);
+    if wanted <= usable {
+        return None;
+    }
+    request.options.threads = Some(usable);
+    Some((wanted, usable))
 }
 
 /// One loaded model per manager: llama.cpp keeps weights resident, and the
@@ -365,6 +390,41 @@ mod tests {
             Some("qwen2.5-0.5b-instruct-gguf")
         );
         assert_eq!(manager.family(), ModelFamily::Qwen2);
+    }
+
+    fn request_with_threads(threads: Option<u32>) -> LoadModelRequest {
+        LoadModelRequest {
+            model_id: "smollm2-135m-gguf".to_string(),
+            options: LoadModelOptions {
+                threads,
+                ..LoadModelOptions::default()
+            },
+            ..LoadModelRequest::default()
+        }
+    }
+
+    /// The cap is judged against this machine, not a hard-coded core count, so
+    /// the same assertion holds on a laptop and on CI.
+    #[test]
+    fn more_threads_than_the_host_has_are_lowered_and_the_rest_pass_through() {
+        let cores = std::thread::available_parallelism()
+            .expect("the host reports usable parallelism")
+            .get()
+            .try_into()
+            .unwrap_or(u32::MAX);
+
+        assert_eq!(cap_threads(&mut request_with_threads(None)), None);
+        assert_eq!(cap_threads(&mut request_with_threads(Some(0))), None);
+        assert_eq!(
+            cap_threads(&mut request_with_threads(Some(cores))),
+            None,
+            "exactly what the host runs is not a cap"
+        );
+
+        let wanted = cores.saturating_mul(4).saturating_add(4);
+        let mut request = request_with_threads(Some(wanted));
+        assert_eq!(cap_threads(&mut request), Some((wanted, cores)));
+        assert_eq!(request.options.threads, Some(cores));
     }
 
     #[tokio::test]

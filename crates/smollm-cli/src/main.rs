@@ -161,10 +161,19 @@ struct RunArgs {
     top_p: Option<f32>,
     #[arg(long)]
     max_tokens: Option<u32>,
+    /// Sampling seed; omit for a different one per run
+    #[arg(long, value_name = "N")]
+    seed: Option<i64>,
+    /// End the answer at this text; repeat the flag for more markers
+    #[arg(long, value_name = "TEXT")]
+    stop: Vec<String>,
     #[arg(long, default_value_t = 4096)]
     context: u32,
     #[arg(long, default_value_t = -1)]
     gpu_layers: i32,
+    /// Decode threads; omit to use every core the machine offers
+    #[arg(long, value_name = "N")]
+    threads: Option<u32>,
     /// auto | mock | llama-cpp | candle | gguf-metadata
     #[arg(long, default_value = "auto")]
     engine: String,

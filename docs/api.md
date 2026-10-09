@@ -45,6 +45,15 @@ Accepted and ignored where the backend cannot honour them yet: `n`, `user`,
 `echo`/`suffix` on `/v1/completions`. A `prompt` array is served one item at a
 time. This keeps official SDKs happy without faking features.
 
+`stop` and `seed` are honoured by every engine rather than parsed and dropped:
+llama.cpp trims the answer at a stop sequence across a token boundary without
+leaking the marker, and the mock does the same to its canned reply so the path is
+testable without weights. A `seed` makes sampling reproducible; omitting it draws a
+fresh one per request. Over HTTP a body with more than eight stops, or one longer
+than 128 characters, is passed through the way OpenAI would receive it — the app's
+own paths (`start_chat_stream`, saving Settings) refuse that instead, because there
+is nobody on the other end to negotiate with.
+
 `messages[].content` accepts all three forms OpenAI allows: a plain string, `null`
 (an assistant turn that only carried tool calls), and the list of typed parts SDKs
 send for multimodal input. Text parts concatenate in order; image and audio parts
@@ -157,9 +166,25 @@ read, so it falls back to the size heuristic. `catalog_facets` returns the disti
 with counts, derived from the loaded catalog including any local overlay.
 
 `start_chat_stream` loads the model on demand, so the chat page can send to a
-model that was never explicitly loaded. `run_benchmark` uses its own engine
-instance so it never competes with the chat; on failure it reports through
-`chat-error` with `requestId: "benchmark"`.
+model that was never explicitly loaded. It also cleans the request's stop
+sequences first — blank and duplicate markers removed, padding trimmed off an
+ordinary marker, a whitespace marker like `\n\n` kept exactly as typed — and
+refuses more than eight or any longer than 128 characters with `invalid_request`.
+The seed and the stop count go on the generation log line, since an answer is only
+reproducible if the seed that made it is written down somewhere.
+
+`save_settings` runs the same check over `chatStops`, and refuses a `defaultThreads`
+of zero or more than 64 — the Settings page spells "no opinion" as 0 and sends `null`,
+which is what Rust stores and what lets the engine use every core. A thread count the
+host cannot fill is lowered to `available_parallelism()` at load time, with a warning
+naming both numbers rather than a silent clamp. Settings carry `sampling` and
+`chatStops` as what a *new* transcript starts with, which the Chat page reads once and
+keeps from then on, so changing Settings cannot quietly rewrite parameters already
+tuned in an open chat.
+
+`run_benchmark` uses its own engine instance so it never competes with the chat; on
+failure it reports through `chat-error` with `requestId: "benchmark"`. A benchmark
+measures the machine as Settings configure it, thread count included.
 
 Conversations are one JSON file per chat under `<data dir>/sessions/<id>.json`,
 written to a temporary name and renamed, so an interrupted write cannot leave a
@@ -282,9 +307,16 @@ smollm models local --json
 smollm models rm llama-3.2-1b-instruct-q4_k_m.gguf
 smollm auth status
 smollm run qwen2.5-0.5b-instruct-gguf --preset creative --max-tokens 128
+smollm run SmolLM2-360M-Instruct-Q4_K_M.gguf --seed 123 --stop '###' --stop $'\n\n' --threads 4
 smollm serve --port 8123 --model qwen2.5-0.5b-instruct-gguf
 smollm bench qwen2.5-0.5b-instruct-gguf --runs 3
 ```
+
+`run` takes `--seed` (repeat the answer exactly; without it each request draws a new
+one), `--stop TEXT` (repeatable, up to eight; `$'\n\n'` is how a shell passes the
+newline marker most chat templates end on) and `--threads N`, which falls back to
+Settings' *Decode threads* and is lowered, with a warning naming both numbers, if it
+is more than this machine runs at once.
 
 Global flags: `--models-dir DIR`, `--verbose` (engine, download and HTTP internals
 on stderr). Most subcommands accept `--json` for scripting. `smollm serve

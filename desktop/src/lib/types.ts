@@ -527,12 +527,16 @@ export interface Settings {
   defaultContextLength: number;
   defaultGpuLayers: number;
   defaultBackend: Backend;
+  /** `null` leaves the thread count to the engine, which uses every core. */
+  defaultThreads?: number | null;
   sampling: SamplingParams;
   serverHost: string;
   serverPort: number;
   autoUpdateChecks: boolean;
   onboardingComplete: boolean;
   chatPreset: string;
+  /** Stop sequences a new transcript starts with. */
+  chatStops: string[];
 }
 
 export interface ResetOutcome {

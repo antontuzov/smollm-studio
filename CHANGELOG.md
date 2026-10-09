@@ -195,9 +195,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   clones the same client rather than re-reading the store; *Reset app data*
   deliberately does not clear it, since that entry belongs to the OS, not to the
   data folder.
+- **The three generation knobs the engine was already reading.** `SamplingParams::seed`,
+  `ChatRequest::stop` and `LoadModelOptions::threads` all reach llama.cpp — a seed
+  makes an answer reproducible, a stop trims it mid-stream without leaking the
+  marker, threads set the decode width — and none of them were reachable from
+  anywhere: neither page had a field and `smollm run` had no flag. The sampling panel
+  now has a seed input (empty means a fresh one per request, with **Random** and
+  **Clear** beside it) and a stop-sequence list shown as removable chips — up to eight
+  markers of 128 characters, typed with `\n` for a newline — and Settings keeps both as
+  what a *new* transcript starts with, with a *Decode threads* field next to the backend
+  and context length. Nothing is quietly corrected: a stop list the engines would ignore
+  is refused with its count in the message, a whitespace marker like `\n\n` is kept
+  exactly as typed because that is how chat templates end, blank and repeated markers are
+  merged before the check, and a thread count above `available_parallelism()` is lowered
+  with a load warning naming both numbers rather than clamped away in silence. The seed
+  and the stop count go on the generation log line, because an answer is only
+  reproducible if the seed that made it was written down. An older `settings.json`
+  loads these as unset — every core, no stops — pinned by a test rather than a migration.
+  Checked against `--features llama-cpp` on an Apple M1 (8 cores): seed 123 repeated one
+  answer byte for byte and seed 999 did not, `--stop ","` truncated at the first comma,
+  and `--threads 64` warned that this machine runs 8 at once.
 
 ### Fixed
 
+- **Settings → "Chat defaults" saved sliders that nothing read.** `Settings.sampling`
+  was validated on save, rendered on the page and then consumed by no code path in
+  Rust or the UI, so a temperature — or a seed, once the seed field existed — tuned
+  there changed nothing about an answer. A new transcript now starts from those
+  stored values, and moving a slider on the Settings page marks the chat preset
+  `custom` so the stored numbers win instead of being reset by the preset they came
+  from. The Chat page reads them once: changing Settings cannot rewrite parameters
+  already tuned in a chat that is open.
 - **Gemma files are readable, so their downloads survive.** The GGUF reader
   capped array lengths at 260,000 on the reasoning that no vocabulary is
   bigger, and Gemma 3's is 262,144 — both its `tokenizer.ggml.tokens` and its

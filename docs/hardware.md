@@ -124,6 +124,18 @@ itself on that device. Even on unified Apple Silicon it is a capped slice of RAM
 as the `Offload` line and the Home page shows it under *This machine* rather than
 implying the GPU can reach all of memory.
 
+## Decode threads
+
+Settings → *Decode threads* is the number llama.cpp may use to decode, and it is
+per-machine rather than per-model: `1` up to `64`, or left unset to use every core.
+Leaving it unset is the right answer most of the time — a model whose layers are all
+offloaded to a GPU is not decoding on the CPU in the first place, so extra threads
+buy nothing. Ask for more threads than `available_parallelism()` reports and the
+load still succeeds, but on the count the machine can actually fill, with a warning
+naming both numbers; that is deliberately a warning rather than a silent clamp,
+because a thread count is something you chose. `smollm run --threads N` overrides it
+for one request, and a benchmark measures the machine as it is configured.
+
 ## Practical guidance
 
 | You have | Do this |

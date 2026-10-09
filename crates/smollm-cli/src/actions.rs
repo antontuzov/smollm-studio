@@ -10,8 +10,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use anyhow::{bail, Context as _, Result};
 use futures::StreamExt;
 use smollm_core::chat::{
-    chat_message, ChatRequest, GenToken, LoadModelOptions, LoadModelRequest, Role, SamplingParams,
-    TokenUsage,
+    chat_message, normalize_stop_sequences, ChatRequest, GenToken, LoadModelOptions,
+    LoadModelRequest, Role, SamplingParams, TokenUsage,
 };
 use smollm_core::config::Settings;
 use smollm_core::model::{
@@ -593,7 +593,9 @@ pub async fn run(ctx: &mut Context, args: &RunArgs) -> Result<()> {
         context_length: args.context.max(512),
         gpu_layers: args.gpu_layers,
         backend: ctx.settings.default_backend,
-        threads: None,
+        // A flag wins; without one the saved default still applies, which is
+        // what the desktop app does with the same settings file.
+        threads: args.threads.or(ctx.settings.default_threads),
     };
     let (request, _) = build_load_request(ctx, &args.model, options, kind)?;
 
@@ -618,7 +620,7 @@ pub async fn run(ctx: &mut Context, args: &RunArgs) -> Result<()> {
         messages: vec![chat_message(Role::User, prompt)],
         system_prompt: args.system.clone(),
         params,
-        stop: Vec::new(),
+        stop: normalize_stop_sequences(&args.stop)?,
     };
 
     let mut stream = manager.start_chat(chat)?;
@@ -717,6 +719,9 @@ fn sampling(args: &RunArgs) -> SamplingParams {
     }
     if let Some(max_tokens) = args.max_tokens {
         params.max_tokens = max_tokens;
+    }
+    if let Some(seed) = args.seed {
+        params.seed = Some(seed);
     }
     params
 }

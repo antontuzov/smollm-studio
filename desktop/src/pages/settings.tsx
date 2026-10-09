@@ -10,6 +10,7 @@ import {
   queryKeys,
   useAppInfo,
   useCatalog,
+  useHardware,
   useHfTokenStatus,
   useLocalModels,
   usePresets,
@@ -43,6 +44,14 @@ const backendOptions: { value: Backend; label: string }[] = [
   { value: "mock", label: "Mock engine (simulated)" },
 ];
 
+/** Mirrors `MAX_DECODE_THREADS` in the Tauri commands, which stays the authority. */
+const MAX_DECODE_THREADS = 64;
+
+/** What leaving the thread count alone buys, said in this machine's own numbers. */
+function coresHint(cores: number | undefined): string {
+  return cores ? `every core (${cores})` : "every core";
+}
+
 /** One line saying where the live token came from, or what is still missing. */
 function tokenPlace(status: TokenStatus | undefined): string {
   if (!status) {
@@ -63,6 +72,7 @@ export function SettingsPage() {
   const token = useHfTokenStatus();
   const catalog = useCatalog({ query: "", sort: "recommended", hidePlaceholders: true });
   const library = useLocalModels();
+  const hardware = useHardware();
   const handle = useEngine((state) => state.handle);
   const setTheme = useUi((state) => state.setTheme);
 
@@ -373,6 +383,17 @@ export function SettingsPage() {
                 onChange={(defaultGpuLayers) => patch({ defaultGpuLayers })}
                 hint="-1 offloads everything the backend supports."
               />
+              <NumberField
+                label="Decode threads"
+                // `0` is how the page spells "no opinion": Rust stores null and
+                // the engine picks, which is what llama.cpp does by default.
+                value={draft.defaultThreads ?? 0}
+                min={0}
+                max={MAX_DECODE_THREADS}
+                suffix={draft.defaultThreads ? "threads" : coresHint(hardware.data?.logicalCores)}
+                onChange={(threads) => patch({ defaultThreads: threads === 0 ? null : threads })}
+                hint="Leave at 0 to use every core; a model already offloaded to the GPU does not get faster by asking for more threads than the machine has."
+              />
             </div>
 
             <Select
@@ -395,7 +416,7 @@ export function SettingsPage() {
         <Card>
           <CardHeader
             title="Chat defaults"
-            description="Preset and sampling used for a new transcript."
+            description="Sampling and stop sequences a new transcript starts with."
           />
           <CardContent>
             <SamplingPanel
@@ -403,7 +424,9 @@ export function SettingsPage() {
               preset={draft.chatPreset}
               params={draft.sampling}
               onPreset={(chatPreset, sampling) => patch({ chatPreset, sampling })}
-              onParams={(sampling) => patch({ sampling })}
+              onParams={(sampling) => patch({ chatPreset: "custom", sampling })}
+              stops={draft.chatStops}
+              onStops={(chatStops) => patch({ chatStops })}
             />
           </CardContent>
         </Card>
