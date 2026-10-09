@@ -123,7 +123,7 @@ they are never stale.
 
 ## Tauri commands
 
-40 commands, all `async` but for `new_chat_session` (which mints an identity and
+41 commands, all `async` but for `new_chat_session` (which mints an identity and
 does no I/O); filesystem and `sysinfo` work moves to the blocking
 pool so the main thread never stalls. Arguments are camelCase in JavaScript and
 snake_case in Rust. Every rejection serialises to `{ code, message, detail }`.
@@ -131,14 +131,14 @@ snake_case in Rust. Every rejection serialises to `{ code, message, detail }`.
 | Area | Commands |
 | --- | --- |
 | Machine | `detect_hardware`, `get_app_info`, `get_doctor_report` |
-| Models | `list_catalog_models`, `catalog_facets`, `list_local_models`, `pull_model`, `cancel_download`, `retry_download`, `get_download_snapshot`, `delete_local_model`, `import_model` |
+| Models | `list_catalog_models`, `catalog_facets`, `list_local_models`, `pull_model`, `cancel_download`, `retry_download`, `get_download_snapshot`, `delete_local_model`, `import_model`, `verify_local_models` |
 | Engine | `load_model`, `unload_model`, `get_engine_metrics`, `get_presets` |
 | Chat | `start_chat_stream`, `stop_generation` |
 | Conversations | `new_chat_session`, `save_chat_session`, `list_chat_sessions`, `search_chat_sessions`, `get_chat_session`, `rename_chat_session`, `delete_chat_session`, `export_chat_session` |
 | Server | `start_server`, `stop_server`, `get_server_status`, `get_server_examples` |
 | Benchmarks | `run_benchmark` |
 | Logs | `get_logs`, `clear_logs` |
-| Settings | `get_settings`, `save_settings`, `reset_app_data`, `export_diagnostics` |
+| Settings | `get_settings`, `save_settings`, `set_model_dir`, `reset_app_data`, `export_diagnostics` |
 | Files | `open_model_folder`, `open_log_folder` |
 
 `list_catalog_models` takes the whole filter bar as one `filters` object
@@ -199,6 +199,21 @@ the size still matches what Hugging Face publishes. `skipped` is a real state, n
 a pass: it means the file gave no number to compare against. GGUF carries no
 per-file checksum, so a flipped byte inside tensor data is invisible here; a file
 that fails is deleted and downloaded again, not repaired.
+
+`set_model_dir` takes an absolute `modelDir`, relocates what the old model folder
+holds into it, persists the new path in `settings.json`, and returns a
+`Relocation`: `from`, `to`, `moved` (renamed in place, so no bytes re-written),
+`copied` (re-written because the folders are on different volumes), `bytes`, and
+three lists that account for every other file — `duplicates` (the destination
+already held that name at the same length), `conflicts` (same name, different
+length) and `failures` (the reason a file could not move). Nothing is overwritten
+and the old folder is never deleted, so anything in those lists is still exactly
+where it was. `save_settings` keeps re-pointing without touching a file, which is
+why **Move** is its own command rather than a flag on Save: pressing Save should
+never copy gigabytes. A move that could break live work is refused with
+`invalid_request` and the reason — a model is resident, so its file is open, or a
+transfer is still running; a cross-volume copy that would not fit reports
+`insufficient_disk_space` instead.
 
 `get_server_status` returns `running`, `host`, `port`, `baseUrl`, `engine`,
 `loadedModel`, `servedModels`, `requests`, `uptimeSeconds` and `simulated`.

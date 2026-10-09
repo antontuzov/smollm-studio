@@ -105,6 +105,13 @@ enum ModelsCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Move the whole library into another folder, and remember where it went.
+    Move {
+        #[arg(value_name = "DIR")]
+        dir: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
     /// Delete a downloaded file by name.
     Rm {
         #[arg(value_name = "FILE")]
@@ -214,6 +221,9 @@ async fn main() -> Result<()> {
         Command::Models(ModelsCommand::Import { path }) => actions::import(&ctx, &path),
         Command::Models(ModelsCommand::Verify { file, json }) => {
             actions::verify(&ctx, file.as_deref(), json)
+        }
+        Command::Models(ModelsCommand::Move { dir, json }) => {
+            actions::move_library(&ctx, &dir, json)
         }
         Command::Models(ModelsCommand::Rm { file }) => actions::remove(&ctx, &file),
         Command::Run(args) => actions::run(&mut ctx, &args).await,

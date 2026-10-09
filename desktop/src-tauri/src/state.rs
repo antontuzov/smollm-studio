@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use smollm_core::config::Settings;
 use smollm_core::logs::LogStore;
+use smollm_core::model::Relocation;
 use smollm_core::paths::AppPaths;
 use smollm_core::system::{HardwareReport, ServerConfig};
 use smollm_core::{AppError, AppResult};
@@ -176,9 +177,31 @@ impl AppState {
     }
 
     /// Point the app at a new model directory: paths, library and downloads.
-    pub fn apply_model_dir(&self, model_dir: Option<String>) -> AppResult<AppPaths> {
+    ///
+    /// With `migrate`, everything the old folder holds is relocated into the new
+    /// one first. Without it the app simply looks elsewhere, which leaves the
+    /// models behind in a folder nothing reads — fine for a deliberate re-point,
+    /// surprising as the answer to "move my models".
+    ///
+    /// A migration refuses to run while it could break live work: a resident
+    /// model would lose the file the engine has open, and a transfer mid-flight
+    /// would resume against a folder that no longer holds its bytes.
+    pub fn apply_model_dir(
+        &self,
+        model_dir: Option<String>,
+        migrate: bool,
+    ) -> AppResult<(AppPaths, Option<Relocation>)> {
         let paths = AppPaths::new(model_dir.map(std::path::PathBuf::from));
+        let previous_dir = self.paths().models_dir;
+        let moving = migrate && paths.models_dir != previous_dir;
+        if moving {
+            self.guard_model_dir_move()?;
+        }
         paths.ensure()?;
+        let relocation = moving
+            .then(|| ModelLibrary::new(paths.clone()).relocate_from(&previous_dir))
+            .transpose()?;
+
         let manager =
             DownloadManager::new(paths.clone(), HfClient::new(), self.download_sink.clone());
         if let Ok(mut guard) = self.downloads.lock() {
@@ -187,7 +210,22 @@ impl AppState {
         if let Ok(mut guard) = self.paths.lock() {
             *guard = paths.clone();
         }
-        Ok(paths)
+        Ok((paths, relocation))
+    }
+
+    /// Why a model folder cannot be moved right now, if that is the case.
+    fn guard_model_dir_move(&self) -> AppResult<()> {
+        if self.engine()?.loaded_handle().is_some() {
+            return Err(AppError::InvalidRequest(
+                "unload the model before moving the model folder".into(),
+            ));
+        }
+        if self.downloads()?.has_active() {
+            return Err(AppError::InvalidRequest(
+                "a download is still running; wait for it or cancel it first".into(),
+            ));
+        }
+        Ok(())
     }
 
     pub fn server_config(&self) -> AppResult<ServerConfig> {
@@ -211,6 +249,7 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use smollm_core::chat::LoadModelRequest;
     use smollm_engine::EngineKind;
 
     fn temp_state(name: &str) -> AppState {
@@ -229,6 +268,16 @@ mod tests {
         let (state, _receiver) =
             AppState::bootstrap(settings, LogStore::new(64)).expect("bootstraps");
         state
+    }
+
+    /// A move target that belongs to no previous run: reusing a fixed folder
+    /// would make a leftover file from an earlier test a duplicate, not a move.
+    fn temp_target(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "smollm-target-{}-{name}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ))
     }
 
     #[test]
@@ -276,19 +325,84 @@ mod tests {
     #[test]
     fn applying_a_model_dir_rebuilds_paths_and_downloads() {
         let state = temp_state("model-dir");
-        let moved = state
-            .paths()
-            .data_dir
-            .join("elsewhere")
-            .display()
-            .to_string();
-        let paths = state.apply_model_dir(Some(moved.clone())).expect("applied");
+        let moved = temp_target("elsewhere").display().to_string();
+        let (paths, relocation) = state
+            .apply_model_dir(Some(moved.clone()), false)
+            .expect("applied");
         assert_eq!(paths.models_dir.display().to_string(), format!("{moved}"));
         assert!(paths.models_dir.exists());
+        assert!(
+            relocation.is_none(),
+            "a plain re-point does not touch any file"
+        );
         assert_eq!(
             state.downloads().expect("downloads").model_dir(),
             paths.models_dir
         );
+    }
+
+    #[test]
+    fn a_model_dir_move_carries_the_files_into_the_new_folder() {
+        let state = temp_state("model-move");
+        let previous = state.paths().models_dir.clone();
+        std::fs::write(previous.join("alpha.gguf"), b"model bytes").expect("write");
+        std::fs::write(previous.join("beta.gguf.part"), b"half a model").expect("write");
+        let target = temp_target("moved-models");
+
+        let (paths, relocation) = state
+            .apply_model_dir(Some(target.display().to_string()), true)
+            .expect("moved");
+        let report = relocation.expect("a move reports what it did");
+
+        assert_eq!(report.moved, 2, "{report:?}");
+        assert_eq!(report.copied, 0);
+        assert!(report.is_complete(), "{report:?}");
+        assert!(paths.models_dir.join("alpha.gguf").exists());
+        assert!(
+            paths.models_dir.join("beta.gguf.part").exists(),
+            "a paused download moves with the folder it belongs to"
+        );
+        assert!(
+            !previous.join("alpha.gguf").exists(),
+            "and the old folder does not keep a second copy"
+        );
+        assert_eq!(
+            state.downloads().expect("downloads").model_dir(),
+            paths.models_dir,
+            "the download manager follows the move"
+        );
+    }
+
+    #[test]
+    fn a_move_is_refused_while_live_work_would_break() {
+        let state = temp_state("model-move-guard");
+        let previous = state.paths().models_dir.clone();
+        let target = temp_target("somewhere-else");
+
+        state
+            .engine()
+            .expect("engine")
+            .load(LoadModelRequest {
+                model_id: "resident".into(),
+                ..LoadModelRequest::default()
+            })
+            .expect("the mock engine takes anything");
+
+        let error = state
+            .apply_model_dir(Some(target.display().to_string()), true)
+            .expect_err("a resident model's file must not be moved out from under it");
+        assert!(matches!(error, AppError::InvalidRequest(_)), "{error:?}");
+        assert!(error.to_string().contains("unload the model"), "{error}");
+        assert_eq!(
+            state.paths().models_dir,
+            previous,
+            "a refused move leaves the app where it was"
+        );
+
+        state.engine().expect("engine").unload().expect("unloaded");
+        state
+            .apply_model_dir(Some(target.display().to_string()), true)
+            .expect("an empty library moves without argument");
     }
 
     #[test]

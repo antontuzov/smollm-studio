@@ -24,7 +24,10 @@ reads weights. See
 
 The model is named but not on disk. Download it from the Models page, or check
 that the model folder in **Settings → Models and engine** still points where your
-files are. Changing that path does not move existing files.
+files are. Typing a new path there does not move existing files — **Move** on that
+row does, and reports what it relocated. A file the new folder already holds by
+name stays in both places rather than being overwritten, so a Library that looks
+empty after a move may be holding the leftover list in the note under the field.
 
 ## `model_not_found`
 
@@ -55,7 +58,18 @@ You pressed Cancel. Not an error; the partial file is kept deliberately.
 ## `insufficient_disk_space`
 
 The download checks free space plus 64 MB of headroom before writing. Free up
-space, or point the model folder at a larger volume in Settings.
+space, or point the model folder at a larger volume in Settings. A move to
+another volume checks free space the same way before it copies, and the source
+file is kept when the copy cannot fit.
+
+## `invalid_request` from a move
+
+Two states make a model folder move unsafe, and both are refused rather than
+renamed out from under the work: a model that is loaded, because the engine holds
+that file open — unload it first — and a download that is still running, because
+it would resume against a folder that no longer has its bytes — wait for it or
+cancel it. Anything the move could not finish is named in the report afterwards,
+and neither folder lost a file to get there.
 
 ## `insufficient_memory`
 

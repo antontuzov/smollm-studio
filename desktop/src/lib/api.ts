@@ -38,6 +38,7 @@ import type {
   LogEntry,
   LogFilter,
   ModelVerification,
+  Relocation,
   ResetOutcome,
   SamplingPreset,
   ServerConfig,
@@ -143,6 +144,7 @@ export const api = {
 
   getSettings: () => call<Settings>("get_settings"),
   saveSettings: (settings: Settings) => call<Settings>("save_settings", { settings }),
+  setModelDir: (modelDir: string) => call<Relocation>("set_model_dir", { modelDir }),
   getPresets: () => call<SamplingPreset[]>("get_presets"),
 
   openModelFolder: () => call<string>("open_model_folder"),

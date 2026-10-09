@@ -204,6 +204,16 @@ impl DownloadManager {
             .and_then(|guard| guard.get(id).cloned())
     }
 
+    /// True while bytes may still be moving into the model folder.
+    ///
+    /// Asked before anything that renames that folder out from under a transfer.
+    pub fn has_active(&self) -> bool {
+        self.tasks
+            .lock()
+            .map(|guard| guard.values().any(|task| task.state.is_active()))
+            .unwrap_or(false)
+    }
+
     pub fn task_for_model(&self, model_id: &str) -> Option<DownloadTask> {
         self.tasks.lock().ok().and_then(|guard| {
             guard

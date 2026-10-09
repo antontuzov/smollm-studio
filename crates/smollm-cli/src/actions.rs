@@ -397,6 +397,59 @@ pub fn import(ctx: &Context, source: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Move the library into a different folder, and leave the settings pointing at
+/// the new one.
+///
+/// Saving the setting is the point: files that moved while the app still names
+/// the old folder look like a library that emptied itself. Anything that could
+/// not move stays where it is, gets named, and turns the exit code non-zero.
+pub fn move_library(ctx: &Context, target: &Path, json: bool) -> Result<()> {
+    if !target.is_absolute() {
+        bail!(
+            "the new model folder has to be an absolute path, got {}",
+            target.display()
+        );
+    }
+    if target.exists() && !target.is_dir() {
+        bail!("{} is a file, not a folder", target.display());
+    }
+
+    let paths = AppPaths::new(Some(target.to_path_buf()));
+    paths.ensure()?;
+    // A library built on the new paths, because `relocate_from` moves files into
+    // the folder its own library points at.
+    let report = ModelLibrary::new(paths.clone()).relocate_from(&ctx.paths.models_dir)?;
+
+    // Pointed wherever the files ended up, even when some of them stayed behind.
+    let mut settings = ctx.settings.clone();
+    settings.model_dir = Some(paths.models_dir.display().to_string());
+    settings.save(&ctx.paths)?;
+
+    if json {
+        return print_json(&report);
+    }
+    println!(
+        "{} file(s) renamed, {} copied, {} into {}",
+        report.moved,
+        report.copied,
+        report::human_size(report.bytes),
+        paths.models_dir.display()
+    );
+    if report.is_complete() {
+        println!("Settings now name {}", paths.models_dir.display());
+        return Ok(());
+    }
+    for left in report.left_behind() {
+        println!("  left in {} — {left}", ctx.paths.models_dir.display());
+    }
+    bail!(
+        "{} file(s) could not move and are still in {}; settings already point at {}",
+        report.left_behind().len(),
+        ctx.paths.models_dir.display(),
+        paths.models_dir.display()
+    )
+}
+
 /// Re-check library files against what their own headers claim about them.
 pub fn verify(ctx: &Context, file: Option<&str>, json: bool) -> Result<()> {
     let reports = match file {

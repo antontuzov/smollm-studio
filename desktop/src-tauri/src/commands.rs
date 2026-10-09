@@ -20,6 +20,7 @@ use smollm_core::chat::{
 use smollm_core::config::Settings;
 use smollm_core::model::{
     estimate_ram_gb, CatalogStatus, LocalModel, ModelDescriptor, ModelMetadata, ModelVerification,
+    Relocation,
 };
 use smollm_core::session::{ChatSession, ExportFormat, SessionHit, SessionIndex, SessionStore};
 use smollm_core::system::{
@@ -1033,7 +1034,8 @@ pub async fn save_settings(
 
     let previous = state.settings()?;
     if settings.model_dir != previous.model_dir {
-        state.apply_model_dir(settings.model_dir.clone())?;
+        // A plain save re-points; moving the files is what `set_model_dir` is for.
+        state.apply_model_dir(settings.model_dir.clone(), false)?;
     }
 
     let paths = state.paths();
@@ -1045,6 +1047,80 @@ pub async fn save_settings(
     refresh_advertised(&app, &state);
     tracing::info!(target: "app", theme = ?settings.theme, "settings saved");
     Ok(settings)
+}
+
+/// Point the app at a new model folder and take the files in the old one with it.
+///
+/// This is the command behind **Move** in Settings, kept apart from `save_settings`
+/// because moving gigabytes is not what pressing Save should imply. The rename,
+/// and the copy that stands in when a rename cannot cross a volume, runs on the
+/// blocking pool; the report says which files moved, which were copied, and which
+/// had to stay where they were.
+#[tauri::command]
+pub async fn set_model_dir(
+    app: AppHandle,
+    state: Shared<'_>,
+    model_dir: String,
+) -> AppResult<Relocation> {
+    let target = validate_model_dir(&model_dir)?;
+    let previous_dir = state.paths().models_dir.clone();
+    let owned = Arc::clone(&state);
+    let (paths, relocation) = run_blocking(move || {
+        let (paths, relocation) = owned.apply_model_dir(Some(target.clone()), true)?;
+        let mut settings = owned.settings()?;
+        settings.model_dir = Some(target);
+        settings.save(&paths)?;
+        {
+            let mut guard = AppState::lock(&owned.settings, "settings")?;
+            *guard = settings;
+        }
+        Ok::<_, AppError>((paths, relocation))
+    })
+    .await??;
+
+    let report = relocation.unwrap_or_else(|| Relocation {
+        from: previous_dir.display().to_string(),
+        to: paths.models_dir.display().to_string(),
+        ..Relocation::default()
+    });
+    refresh_advertised(&app, &state);
+    tracing::info!(
+        target: "app",
+        from = %report.from,
+        to = %report.to,
+        moved = report.moved,
+        copied = report.copied,
+        left_behind = report.left_behind().len(),
+        "model folder moved"
+    );
+    Ok(report)
+}
+
+/// A folder the models can live in: absolute, and not a file that exists.
+///
+/// Normalised to a string because that is what the setting holds, and the same
+/// value has to go to the paths and to settings.json without a second opinion.
+fn validate_model_dir(raw: &str) -> AppResult<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::InvalidRequest(
+            "choose a folder to move the models into".into(),
+        ));
+    }
+    let path = PathBuf::from(trimmed);
+    if !path.is_absolute() {
+        return Err(AppError::InvalidRequest(format!(
+            "the model folder has to be an absolute path, got {}",
+            path.display()
+        )));
+    }
+    if path.exists() && !path.is_dir() {
+        return Err(AppError::InvalidRequest(format!(
+            "{} is a file, not a folder",
+            path.display()
+        )));
+    }
+    Ok(path.display().to_string())
 }
 
 #[tauri::command]
@@ -1400,6 +1476,29 @@ mod tests {
     fn preset_labels_are_human_readable() {
         assert_eq!(capitalise("coding"), "Coding");
         assert_eq!(capitalise(""), "");
+    }
+
+    #[test]
+    fn a_model_dir_has_to_be_an_absolute_folder() {
+        assert!(validate_model_dir("   ").is_err(), "empty is not a folder");
+        assert!(
+            validate_model_dir("relative/models").is_err(),
+            "a relative move target would land wherever the app was started"
+        );
+
+        let file =
+            std::env::temp_dir().join(format!("smollm-dir-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::write(&file, b"not a folder").expect("write");
+        assert!(
+            validate_model_dir(&file.display().to_string()).is_err(),
+            "a file cannot hold the models"
+        );
+        std::fs::remove_file(&file).ok();
+
+        // A folder that does not exist yet is fine: the move creates it.
+        let missing = file.with_file_name("smollm-nested-models");
+        let target = validate_model_dir(&missing.display().to_string()).expect("usable");
+        assert!(PathBuf::from(target).is_absolute());
     }
 
     #[test]

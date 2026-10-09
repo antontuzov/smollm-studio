@@ -112,6 +112,46 @@ Terminal: `smollm models verify` for the whole folder, `smollm models verify
 SmolLM2-360M-Instruct-Q4_K_M.gguf` for one file, `--json` for scripts. The command
 exits non-zero when a file fails, so it is usable from a shell.
 
+## Moving the model folder
+
+The folder can be re-pointed — an external SSD, a different disk, anywhere the
+models fit — and the two ways to do it mean different things on purpose:
+
+- **Settings → Models and engine → Model folder**, then Save, only re-points. The
+  files stay where they were, which is what you want when the folder already holds
+  them and the setting merely needs to agree.
+- **Move** on that same row takes the files with it and then persists the new
+  path, so the setting and the bytes cannot disagree — which is what "move my
+  models" asks for, and what a plain re-point used to leave as an apparently empty
+  Library.
+
+A move is rename-first and never destructive:
+
+| Situation | What happens |
+| --- | --- |
+| Both folders on one volume | the file is renamed into place — instant, no bytes re-written |
+| Different volumes | free space is checked, the bytes are copied to the `.gguf.part` staging name, and the source is deleted only once the copy is proved (same length, and for a `.gguf` a header re-read) |
+| The name already exists in the target | both files stay exactly where they are; equal length is reported as a duplicate, a different length as a conflict |
+| A file cannot move | it stays, and is named in the report |
+| Anything else in the folder | left alone — only `.gguf` and `.gguf.part` are model files |
+
+The old folder is never deleted, and nothing in the new one is ever overwritten.
+Every file ends up in exactly one of those buckets, which is what lets the app
+say *what happened* rather than *it should have worked*: a paused download's
+partial file moves with the folder it belongs to, and anything left behind is
+listed in the note afterwards.
+
+Two cases are refused before a single rename, because both would break live work:
+a model that is loaded right now (the engine holds that file open), and a
+transfer that is still running (it would resume against a folder that no longer
+has its bytes). Unload or cancel first.
+
+Terminal: `smollm models move /Volumes/fast/Models` runs the same
+`ModelLibrary::relocate_from` and then writes the new path into `settings.json`,
+because files that moved while the app still named the old folder would look like
+an emptied library. `--json` prints the report; the command exits non-zero when a
+file was left behind.
+
 ## Downloads
 
 A transfer is a small state machine: *queued → running → (retrying)* →

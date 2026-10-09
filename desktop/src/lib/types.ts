@@ -185,6 +185,23 @@ export interface ModelVerification {
   checks: VerificationCheck[];
 }
 
+/**
+ * What moving the model folder did. Renames are free and instant on one volume;
+ * a copy means the folders were on different ones. Anything listed here is a file
+ * the old folder still holds, because a move never overwrites a name the new
+ * folder already has.
+ */
+export interface Relocation {
+  from: string;
+  to: string;
+  moved: number;
+  copied: number;
+  bytes: number;
+  duplicates: string[];
+  conflicts: string[];
+  failures: string[];
+}
+
 export type DownloadState =
   | "queued"
   | "running"

@@ -116,6 +116,7 @@ pub fn run() {
             commands::clear_logs,
             commands::get_settings,
             commands::save_settings,
+            commands::set_model_dir,
             commands::get_presets,
             commands::open_model_folder,
             commands::open_log_folder,

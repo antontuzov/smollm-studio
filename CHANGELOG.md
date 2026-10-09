@@ -155,6 +155,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   data cannot be seen from outside, and a file that fails is deleted and
   re-downloaded, not repaired. `smollm models verify [FILE] [--json]` is the same
   code, and exits non-zero when a file fails.
+- **The model folder can be moved, and takes its files with it.** Editing
+  *Model folder* only ever re-pointed the app, so the library stayed behind in a
+  folder nothing read any more — the honest description of that click was "my
+  models have disappeared". **Move** on the Settings row now relocates the files
+  and persists the new path in one step, and **Save** still only re-points, so
+  pressing Save cannot copy gigabytes. The move is rename-first: on one volume a
+  file is renamed, so no bytes are re-written, and only when the rename fails does
+  it copy — free space checked first, bytes into the `.gguf.part` staging name,
+  the source deleted only after the copy is proved by length and a GGUF header
+  re-read. Nothing is ever overwritten: a name the target already holds stays in
+  both folders and is reported as a duplicate (equal length) or a conflict
+  (different length), the old folder is never deleted, and anything that could not
+  move is listed in the note afterwards, because `settings.json` alone cannot say
+  where the models are. A paused download's partial file moves with the folder it
+  belongs to; files that are not models are left alone. A move is refused while a
+  model is loaded — the engine has that file open — or while a transfer is running.
+  `smollm models move DIR [--json]` is the same `relocate_from`, and is the one CLI
+  command that writes `settings.json` because the files really did move; it exits
+  non-zero when a file was left behind.
 
 ### Fixed
 

@@ -1,11 +1,11 @@
-//! Local model library: scan, import, verify and delete downloaded GGUF files.
+//! Local model library: scan, import, verify, relocate and delete GGUF files.
 
 use std::path::{Path, PathBuf};
 
 use smollm_core::error::{AppError, AppResult};
 use smollm_core::gguf::GgufHeader;
 use smollm_core::model::{
-    LocalModel, ModelDescriptor, ModelMetadata, ModelVerification, VerificationCheck,
+    LocalModel, ModelDescriptor, ModelMetadata, ModelVerification, Relocation, VerificationCheck,
 };
 use smollm_core::paths::AppPaths;
 
@@ -165,6 +165,93 @@ impl ModelLibrary {
             .iter()
             .map(|model| verify_path(Path::new(&model.path), catalog))
             .collect())
+    }
+
+    /// Move what the old model folder holds into the folder this library points
+    /// at, and report everything that could not move.
+    ///
+    /// Pointing the app at a new folder without this leaves the models behind in
+    /// a folder nothing reads, which is why changing the setting has to ask. Each
+    /// file is renamed first, because on one volume that is instant and costs no
+    /// space; when a rename fails — across volumes, mostly — the bytes are copied
+    /// to the same `.part` staging name a download uses, the copy is proved, and
+    /// only then is the source removed.
+    ///
+    /// Nothing overwrites a name the new folder already holds, and the old folder
+    /// is never deleted, so the worst outcome here is a file that stays where it
+    /// was and is named in the report.
+    pub fn relocate_from(&self, previous: &Path) -> AppResult<Relocation> {
+        let from = previous
+            .canonicalize()
+            .unwrap_or_else(|_| previous.to_path_buf());
+        let to = self
+            .paths
+            .models_dir
+            .canonicalize()
+            .unwrap_or_else(|_| self.paths.models_dir.clone());
+        let mut report = Relocation {
+            from: from.display().to_string(),
+            to: to.display().to_string(),
+            ..Relocation::default()
+        };
+        if from == to || !from.is_dir() {
+            return Ok(report);
+        }
+        self.paths.ensure()?;
+
+        for source in folder_files(&from) {
+            let relative = source
+                .strip_prefix(&from)
+                .unwrap_or(source.as_path())
+                .to_path_buf();
+            let name = relative.display().to_string();
+            let size = match file_size(&source) {
+                Ok(size) => size,
+                Err(error) => {
+                    report.failures.push(format!("{name} — {error}"));
+                    continue;
+                }
+            };
+            let dest = to.join(&relative);
+            if dest.exists() {
+                // Both files stay where they are. Equal length is the closest
+                // this can come to proving they are the same model, and it is
+                // reported as a duplicate rather than silently throwing one away.
+                if file_size(&dest).ok() == Some(size) {
+                    report.duplicates.push(name);
+                } else {
+                    report.conflicts.push(name);
+                }
+                continue;
+            }
+            if let Some(parent) = dest.parent() {
+                if let Err(error) = std::fs::create_dir_all(parent) {
+                    report.failures.push(format!("{name} — {error}"));
+                    continue;
+                }
+            }
+            match relocate_file(&source, &dest, size) {
+                Ok(renamed) => {
+                    if renamed {
+                        report.moved += 1;
+                    } else {
+                        report.copied += 1;
+                    }
+                    report.bytes += size;
+                }
+                Err(error) => report.failures.push(format!("{name} — {error}")),
+            }
+        }
+
+        tracing::info!(
+            from = %report.from,
+            to = %report.to,
+            moved = report.moved,
+            copied = report.copied,
+            left = report.left_behind().len(),
+            "relocated the model folder"
+        );
+        Ok(report)
     }
 
     pub fn exists(&self, model: &ModelDescriptor) -> bool {
@@ -509,6 +596,17 @@ fn numerate(base: &str, models_dir: &Path, source: &Path) -> AppResult<String> {
 
 /// Copy, then prove the copy is the file the library should open.
 fn write_copy(source: &Path, temp: &Path, size: u64) -> AppResult<()> {
+    copy_bytes(source, temp, size)?;
+    // Read back from the copy rather than trusting the source: this is the file
+    // that will be loaded, and a full disk mid-copy is exactly how a truncated
+    // model gets into a library.
+    GgufHeader::read(temp)?;
+    Ok(())
+}
+
+/// Copy bytes and check their length. A `.part` file is a download in progress,
+/// so length is the only thing it can be judged on.
+fn copy_bytes(source: &Path, temp: &Path, size: u64) -> AppResult<()> {
     std::fs::copy(source, temp)?;
     let written = file_size(temp)?;
     if written != size {
@@ -516,11 +614,81 @@ fn write_copy(source: &Path, temp: &Path, size: u64) -> AppResult<()> {
             "the copy stopped short: {written} of {size} bytes"
         ))));
     }
-    // Read back from the copy rather than trusting the source: this is the file
-    // that will be loaded, and a full disk mid-copy is exactly how a truncated
-    // model gets into a library.
-    GgufHeader::read(temp)?;
     Ok(())
+}
+
+/// Relocate one file, returning whether the rename was enough.
+fn relocate_file(source: &Path, dest: &Path, size: u64) -> AppResult<bool> {
+    // The rename is tried first because it is the only move that cannot run out
+    // of space halfway.
+    if std::fs::rename(source, dest).is_ok() {
+        return Ok(true);
+    }
+    let landing = dest.parent().unwrap_or(dest);
+    let free = free_space(landing)?;
+    if size > free {
+        return Err(AppError::InsufficientDiskSpace {
+            required_gb: gb(size),
+            available_gb: gb(free),
+        });
+    }
+    copy_then_remove(source, dest, size)?;
+    Ok(false)
+}
+
+/// Copy a file into place, then drop the source it came from.
+///
+/// The source is deleted only after the copy proved itself — same length, and for
+/// a model file a header that re-reads from the copy — so a move that fails leaves
+/// the file exactly where it was rather than half in each folder.
+fn copy_then_remove(source: &Path, dest: &Path, size: u64) -> AppResult<()> {
+    let temp = partial_path_for(dest);
+    let proved = if is_model_file(dest) {
+        write_copy(source, &temp, size)
+    } else {
+        // A `.part` file is a download in progress, so it is not expected to hold
+        // a complete header; length is what it can be judged on.
+        copy_bytes(source, &temp, size)
+    };
+    if let Err(error) = proved {
+        let _ = std::fs::remove_file(&temp);
+        return Err(error);
+    }
+    std::fs::rename(&temp, dest)?;
+    std::fs::remove_file(source)?;
+    Ok(())
+}
+
+/// Every model file and in-progress download under `root`, in sorted order so a
+/// report reads the same twice.
+///
+/// Depth and the extension rules match the scan, since the point is to move
+/// exactly what the library would otherwise have gone looking for.
+fn folder_files(root: &Path) -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = walkdir::WalkDir::new(root)
+        .max_depth(3)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+        .map(|entry| entry.into_path())
+        .filter(|path| is_model_file(path) || is_partial_file(path))
+        .collect();
+    paths.sort();
+    paths
+}
+
+fn is_model_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("gguf"))
+}
+
+/// A download that never finished: `.gguf.part`, named by `partial_path_for`.
+fn is_partial_file(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.to_ascii_lowercase().ends_with(".gguf.part"))
 }
 
 fn file_size(path: &Path) -> AppResult<u64> {
@@ -1021,5 +1189,165 @@ mod tests {
             .find(|report| report.file_name == "broken.gguf")
             .expect("the broken file is reported, not dropped");
         assert!(!broken.ok);
+    }
+
+    #[test]
+    fn a_move_takes_every_model_and_paused_download_with_it() {
+        let from = temp_dir("move-from");
+        let to = temp_dir("move-to");
+        std::fs::write(from.join("whole.gguf"), model_bytes(&[1_000], 0, 1_000)).expect("write");
+        std::fs::write(from.join("half.gguf.part"), b"bytes so far").expect("write");
+        std::fs::write(from.join("notes.txt"), b"not a model").expect("write");
+
+        let library = ModelLibrary::new(AppPaths::new(Some(to.clone())));
+        let report = library.relocate_from(&from).expect("relocates");
+
+        assert_eq!(report.moved, 2, "one volume, so no file had to be copied");
+        assert_eq!(report.copied, 0);
+        assert!(report.bytes > 0);
+        assert!(report.is_complete(), "{:?}", report);
+        assert!(to.join("whole.gguf").exists());
+        assert!(
+            to.join("half.gguf.part").exists(),
+            "a paused download moves too, so resuming still finds its bytes"
+        );
+        assert!(
+            from.join("notes.txt").exists(),
+            "only what the library reads is moved"
+        );
+        assert!(
+            !from.join("whole.gguf").exists(),
+            "a file that arrived is not left behind as well"
+        );
+    }
+
+    #[test]
+    fn a_move_keeps_the_subfolders_the_scan_reads() {
+        let from = temp_dir("nested-from");
+        let to = temp_dir("nested-to");
+        std::fs::create_dir_all(from.join("casual")).expect("dir");
+        std::fs::write(
+            from.join("casual").join("whole.gguf"),
+            model_bytes(&[1_000], 0, 1_000),
+        )
+        .expect("write");
+
+        let library = ModelLibrary::new(AppPaths::new(Some(to)));
+        let report = library.relocate_from(&from).expect("relocates");
+        assert_eq!(report.moved, 1);
+        assert!(report.is_complete());
+
+        let models = library.scan(&ModelCatalog::embedded()).expect("scan");
+        assert_eq!(models.len(), 1, "a nested model stays in the library");
+        assert!(
+            models[0].path.ends_with("casual/whole.gguf"),
+            "{}",
+            models[0].path
+        );
+    }
+
+    #[test]
+    fn a_name_the_new_folder_holds_is_kept_in_both_and_reported() {
+        let from = temp_dir("clash-from");
+        let to = temp_dir("clash-to");
+        let model = model_bytes(&[1_000], 0, 1_000);
+        // Alphabetical in the walk, so `other` is the conflict and `twin` the duplicate.
+        std::fs::write(from.join("other.gguf"), &model).expect("write");
+        std::fs::write(to.join("other.gguf"), b"something else entirely").expect("write");
+        std::fs::write(from.join("twin.gguf"), &model).expect("write");
+        std::fs::write(to.join("twin.gguf"), &model).expect("write");
+
+        let library = ModelLibrary::new(AppPaths::new(Some(to.clone())));
+        let report = library.relocate_from(&from).expect("relocates");
+
+        assert_eq!(report.relocated(), 0, "nothing overwrote a file in place");
+        assert_eq!(report.duplicates, vec!["twin.gguf".to_string()]);
+        assert_eq!(report.conflicts, vec!["other.gguf".to_string()]);
+        assert!(!report.is_complete());
+        assert!(
+            from.join("twin.gguf").exists() && from.join("other.gguf").exists(),
+            "both files keep a copy, because length alone cannot prove they match"
+        );
+        assert_eq!(
+            std::fs::read(to.join("other.gguf")).expect("read"),
+            b"something else entirely"
+        );
+    }
+
+    #[test]
+    fn a_folder_that_is_already_the_library_or_is_absent_moves_nothing() {
+        let dir = temp_dir("same-dir");
+        std::fs::write(dir.join("whole.gguf"), gguf_bytes("Whole")).expect("write");
+        let library = ModelLibrary::new(AppPaths::new(Some(dir.clone())));
+        let report = library.relocate_from(&dir).expect("relocates");
+        assert_eq!(report.relocated(), 0, "the same folder twice is not a move");
+        assert!(report.is_complete());
+        assert!(dir.join("whole.gguf").exists(), "and nothing was lost");
+
+        let elsewhere = temp_dir("elsewhere");
+        let library = ModelLibrary::new(AppPaths::new(Some(elsewhere)));
+        let report = library
+            .relocate_from(Path::new("/no/such/model/folder"))
+            .expect("an empty old folder is not an error");
+        assert_eq!(report.relocated(), 0);
+    }
+
+    #[test]
+    fn a_proved_copy_is_what_allows_the_source_to_go() {
+        let from = temp_dir("copy-from");
+        let to = temp_dir("copy-to");
+        std::fs::write(from.join("whole.gguf"), model_bytes(&[1_000], 0, 1_000)).expect("write");
+        std::fs::write(from.join("half.gguf.part"), b"partial bytes").expect("write");
+
+        // The branch a cross-volume move takes, driven directly: a rename would
+        // always win on one disk, so the copy is what needs its own test.
+        let model = from.join("whole.gguf");
+        let dest = to.join("whole.gguf");
+        let size = file_size(&model).expect("sized");
+        copy_then_remove(&model, &dest, size).expect("copied");
+        assert!(dest.exists());
+        assert!(
+            !model.exists(),
+            "the source goes only once the copy proved itself"
+        );
+        assert!(
+            !to.join("whole.gguf.part").exists(),
+            "the staging name is gone"
+        );
+
+        let partial = from.join("half.gguf.part");
+        let dest = to.join("half.gguf.part");
+        let size = file_size(&partial).expect("sized");
+        copy_then_remove(&partial, &dest, size).expect("copied");
+        assert!(
+            dest.exists(),
+            "a partial file has no header to re-read, and moves anyway"
+        );
+        assert!(!partial.exists());
+    }
+
+    #[test]
+    fn a_copy_that_cannot_be_proved_leaves_the_source_alone() {
+        let from = temp_dir("copy-bad-from");
+        let to = temp_dir("copy-bad-to");
+        // Right extension, wrong bytes: the header re-read on the copy is what
+        // has to refuse it.
+        let source = from.join("broken.gguf");
+        std::fs::write(&source, b"GGUZ not a model file").expect("write");
+        let dest = to.join("broken.gguf");
+        let size = file_size(&source).expect("sized");
+
+        let error = copy_then_remove(&source, &dest, size)
+            .expect_err("a header that does not read back stops the move");
+        assert!(matches!(error, AppError::GgufParse(_)), "{error:?}");
+        assert!(
+            source.exists(),
+            "the bytes the user had are not thrown away for a copy we cannot trust"
+        );
+        assert!(!dest.exists());
+        assert!(
+            !to.join("broken.gguf.part").exists(),
+            "and the failed staging file is cleaned up"
+        );
     }
 }

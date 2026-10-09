@@ -401,6 +401,59 @@ impl ModelVerification {
     }
 }
 
+/// What pointing the app at a new model folder did to the files in the old one.
+///
+/// A move never overwrites a name the new folder already holds, and never
+/// deletes the old folder, so every file has to be accounted for here: relocated,
+/// left where it was, or refused with a reason. Anything in `conflicts`,
+/// `duplicates` or `failures` is a file the user still has to decide about.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Relocation {
+    pub from: String,
+    pub to: String,
+    /// Files that moved by rename, which costs no time or space on one volume.
+    pub moved: usize,
+    /// Files copied byte for byte, then removed from the source, because a
+    /// rename cannot cross a volume.
+    pub copied: usize,
+    /// Bytes that ended up in the new folder.
+    pub bytes: u64,
+    /// Names the new folder already held at the same size, so the old copy stayed
+    /// where it was. Equal length is not proof of equal bytes, which is why these
+    /// are listed rather than quietly discarded.
+    pub duplicates: Vec<String>,
+    /// Names the new folder held at a *different* size. Both files are kept and
+    /// the old one is reported, because guessing which is right is not this
+    /// code's call.
+    pub conflicts: Vec<String>,
+    /// Files that could not be relocated, each with the reason.
+    pub failures: Vec<String>,
+}
+
+impl Relocation {
+    /// Files that ended up in the new folder.
+    pub fn relocated(&self) -> usize {
+        self.moved + self.copied
+    }
+
+    /// True when nothing was left behind, so the old folder can be ignored.
+    pub fn is_complete(&self) -> bool {
+        self.duplicates.is_empty() && self.conflicts.is_empty() && self.failures.is_empty()
+    }
+
+    /// Names of the files still sitting in the old folder, which is what the UI
+    /// lists so nothing is silently left behind.
+    pub fn left_behind(&self) -> Vec<&str> {
+        self.duplicates
+            .iter()
+            .chain(self.conflicts.iter())
+            .chain(self.failures.iter())
+            .map(String::as_str)
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -516,5 +569,24 @@ mod tests {
             ..Default::default()
         };
         assert!(model.estimated_ram_gb(32768) > model.estimated_ram_gb(2048));
+    }
+
+    #[test]
+    fn a_relocation_only_counts_as_clean_with_nothing_left_behind() {
+        let mut report = Relocation {
+            from: "/old".into(),
+            to: "/new".into(),
+            moved: 2,
+            copied: 1,
+            bytes: 300,
+            ..Relocation::default()
+        };
+        assert_eq!(report.relocated(), 3);
+        assert!(report.is_complete());
+
+        // A file the new folder already held is a decision the user still has.
+        report.conflicts.push("Model-Q4_K_M.gguf".into());
+        assert!(!report.is_complete());
+        assert_eq!(report.left_behind(), vec!["Model-Q4_K_M.gguf"]);
     }
 }

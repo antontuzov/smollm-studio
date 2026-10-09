@@ -80,6 +80,12 @@ copy off a USB drive. **Settings → Data and privacy** has buttons that open bo
 folders, and an **Export diagnostics** action that writes hardware, settings and
 the last log lines into one file for a bug report.
 
+Models alone can go to another disk: **Settings → Models and engine → Move**
+relocates the files and remembers the new folder, while typing a path and saving
+only re-points. [models.md — moving the model
+folder](models.md#moving-the-model-folder) covers what each case does to the
+bytes, or `smollm models move /Volumes/fast/Models` from a terminal.
+
 **Settings → Appearance** switches themes: the app opens in light, dark is
 equally tuned, and *Follow the system* tracks the OS setting live.
 

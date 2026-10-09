@@ -1,19 +1,22 @@
 import { useEffect, useState } from "react";
-import { FolderOpen, Save, Settings2, Trash2 } from "lucide-react";
+import { FolderInput, FolderOpen, Save, Settings2, Trash2 } from "lucide-react";
 
 import { api } from "@/lib/api";
 import { exportDiagnostics, openFolder } from "@/lib/actions";
-import { describeError } from "@/lib/format";
+import { describeError, formatBytes } from "@/lib/format";
+import { describeMove, moveModelDir, pickModelDir, sameFolder } from "@/lib/model-dir";
 import { queryClient } from "@/lib/query-client";
 import {
   queryKeys,
   useAppInfo,
   useCatalog,
+  useLocalModels,
   usePresets,
   useSettingsQuery,
 } from "@/lib/queries";
 import { useChat } from "@/stores/chat";
-import { useUi } from "@/stores/ui";
+import { useEngine } from "@/stores/engine";
+import { toast, useUi } from "@/stores/ui";
 import { PageHeader } from "@/components/page-header";
 import { SamplingPanel } from "@/components/sampling-panel";
 import { Badge } from "@/components/ui/badge";
@@ -23,7 +26,7 @@ import { ConfirmDialog } from "@/components/ui/dialog";
 import { Input, NumberField, Select, Switch } from "@/components/ui/field";
 import { ErrorState, Note, SkeletonList } from "@/components/ui/feedback";
 
-import type { Backend, ResetOutcome, Settings, ThemeMode } from "@/lib/types";
+import type { Backend, Relocation, ResetOutcome, Settings, ThemeMode } from "@/lib/types";
 
 const themeOptions = [
   { value: "dark", label: "Dark" },
@@ -44,6 +47,8 @@ export function SettingsPage() {
   const appInfo = useAppInfo();
   const presets = usePresets();
   const catalog = useCatalog({ query: "", sort: "recommended", hidePlaceholders: true });
+  const library = useLocalModels();
+  const handle = useEngine((state) => state.handle);
   const setTheme = useUi((state) => state.setTheme);
 
   const [draft, setDraft] = useState<Settings | null>(null);
@@ -51,6 +56,9 @@ export function SettingsPage() {
   const [resetting, setResetting] = useState(false);
   const [showReset, setShowReset] = useState(false);
   const [resetResult, setResetResult] = useState<ResetOutcome | null>(null);
+  const [pendingMove, setPendingMove] = useState<string | null>(null);
+  const [moving, setMoving] = useState(false);
+  const [moveResult, setMoveResult] = useState<Relocation | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
 
   useEffect(() => {
@@ -84,6 +92,12 @@ export function SettingsPage() {
   const patch = (changes: Partial<Settings>) => setDraft({ ...draft, ...changes });
   const downloaded = (catalog.data ?? []).filter((model) => model.downloaded);
   const dirty = JSON.stringify(draft) !== JSON.stringify(settings.data ?? draft);
+  const files = library.data ?? [];
+  const libraryBytes = files.reduce((sum, model) => sum + model.sizeBytes, 0);
+  const moveCount = library.isPending ? null : files.length;
+  const leftBehind = moveResult
+    ? [...moveResult.duplicates, ...moveResult.conflicts, ...moveResult.failures]
+    : [];
 
   const save = async () => {
     setSaving(true);
@@ -103,6 +117,38 @@ export function SettingsPage() {
       setFailure(describeError(error));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const startMove = async () => {
+    const chosen = await pickModelDir(appInfo.data?.modelsDir);
+    if (!chosen) {
+      return;
+    }
+    if (sameFolder(chosen, appInfo.data?.modelsDir)) {
+      toast({ title: "That is already the model folder", variant: "default" });
+      return;
+    }
+    setMoveResult(null);
+    setPendingMove(chosen);
+  };
+
+  const confirmMove = async () => {
+    const target = pendingMove;
+    if (!target) {
+      return;
+    }
+    setMoving(true);
+    const report = await moveModelDir(target);
+    setMoving(false);
+    setPendingMove(null);
+    if (report) {
+      setMoveResult(report);
+      // The draft has to hold exactly what Rust just persisted, or the next Save
+      // would point the setting back at the folder the files left. `report.to` is
+      // the canonicalised path, so it is not used here.
+      setDraft((previous) => (previous ? { ...previous, modelDir: target } : previous));
+      toast(describeMove(report));
     }
   };
 
@@ -199,11 +245,34 @@ export function SettingsPage() {
                   <FolderOpen />
                   Show
                 </Button>
+                <Button variant="outline" onClick={() => void startMove()}>
+                  <FolderInput />
+                  Move
+                </Button>
               </div>
               <p className="text-xs text-muted-foreground">
                 Leave empty for the default location. Saving points downloads, the library scan and
-                resume bookkeeping at the new folder; existing files are not copied.
+                resume bookkeeping at the new folder; existing files are not copied.{" "}
+                <strong>Move</strong> takes them with it, so the setting and the files cannot
+                disagree about where the models are.
               </p>
+              {moveResult ? (
+                <Note tone={leftBehind.length > 0 ? "warning" : "info"}>
+                  <p className="font-medium">
+                    {moveResult.moved + moveResult.copied > 0
+                      ? `${moveResult.moved} renamed, ${moveResult.copied} copied — ${formatBytes(
+                          moveResult.bytes,
+                        )} now in ${moveResult.to}`
+                      : `${moveResult.from} held no model files, so nothing had to move`}
+                  </p>
+                  {leftBehind.length > 0 ? (
+                    <p>
+                      Left where they are — a move never overwrites a file it found in the target,
+                      and one it could not prove stayed put: {leftBehind.join(", ")}.
+                    </p>
+                  ) : null}
+                </Note>
+              ) : null}
             </div>
 
             <Select
@@ -356,6 +425,59 @@ export function SettingsPage() {
           </CardFooter>
         </Card>
       </div>
+
+      <ConfirmDialog
+        open={pendingMove !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPendingMove(null);
+          }
+        }}
+        title="Move the model folder?"
+        description={
+          <>
+            <p>
+              {moveCount === null ? (
+                <>The file list is still loading, so the report afterwards says what moved.</>
+              ) : moveCount === 0 ? (
+                <>
+                  <span className="font-mono text-[11px]">{appInfo.data?.modelsDir}</span> holds no
+                  model files, so this only points the app at{" "}
+                  <span className="font-mono text-[11px]">{pendingMove}</span>.
+                </>
+              ) : (
+                <>
+                  {moveCount} file(s) · {formatBytes(libraryBytes)} move from{" "}
+                  <span className="font-mono text-[11px]">{appInfo.data?.modelsDir}</span> to{" "}
+                  <span className="font-mono text-[11px]">{pendingMove}</span>.
+                </>
+              )}
+            </p>
+            <p className="mt-2">
+              On one volume a file is renamed, which is instant. Across volumes it is copied and its
+              header re-read before the original is deleted. A name the new folder already holds
+              stays in both places and is listed afterwards: nothing is overwritten, and the old
+              folder is never deleted. A paused download goes with its folder; files that are not
+              models are left where they are.
+            </p>
+            {handle ? (
+              <p className="mt-2">
+                {handle.displayName} is loaded right now, so this will be refused until the model is
+                unloaded.
+              </p>
+            ) : null}
+          </>
+        }
+        confirmLabel={
+          moveCount === null
+            ? "Move the files"
+            : moveCount > 0
+              ? `Move ${moveCount} file(s)`
+              : "Change the folder"
+        }
+        pending={moving}
+        onConfirm={() => void confirmMove()}
+      />
 
       <ConfirmDialog
         open={showReset}
