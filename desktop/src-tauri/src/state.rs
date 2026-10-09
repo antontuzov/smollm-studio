@@ -11,6 +11,7 @@ use smollm_core::config::Settings;
 use smollm_core::logs::LogStore;
 use smollm_core::model::Relocation;
 use smollm_core::paths::AppPaths;
+use smollm_core::secrets::{self, Secret};
 use smollm_core::system::{HardwareReport, ServerConfig};
 use smollm_core::{AppError, AppResult};
 use smollm_engine::EngineManager;
@@ -58,6 +59,10 @@ impl AppState {
             Self {
                 downloads: Mutex::new(DownloadManager::new(
                     paths.clone(),
+                    // Deliberately started without a credential: reading the
+                    // store can wait on a system agent (macOS asks the user to
+                    // allow the first access), which must not hold up the main
+                    // thread. `sync_hf_token` installs it from a blocking task.
                     HfClient::new(),
                     sink.clone(),
                 )),
@@ -107,6 +112,35 @@ impl AppState {
 
     pub fn downloads(&self) -> AppResult<DownloadManager> {
         Ok(Self::lock(&self.downloads, "downloads")?.clone())
+    }
+
+    /// The client the download engine uses, token cell shared.
+    fn hf_client(&self) -> HfClient {
+        match self.downloads() {
+            Ok(manager) => manager.client().clone(),
+            Err(_) => HfClient::new(),
+        }
+    }
+
+    /// Load the Hugging Face token from the OS credential store into the engine.
+    ///
+    /// Blocking, so it runs on a blocking thread at startup and after a token is
+    /// written or removed. Only whether a token was found is logged, never which
+    /// one.
+    pub fn sync_hf_token(&self) -> bool {
+        let token = secrets::hf_token();
+        let found = token.is_some();
+        self.set_hf_token(token);
+        found
+    }
+
+    /// Point every current and future request at a token, `None` meaning "send
+    /// nothing". Already-running transfers pick it up on their next request.
+    pub fn set_hf_token(&self, token: Option<Secret>) {
+        match self.downloads() {
+            Ok(manager) => manager.set_hf_token(token),
+            Err(error) => tracing::warn!(%error, "the download engine is unavailable"),
+        }
     }
 
     /// Remember a started server; returns the watcher's running flag.
@@ -202,8 +236,14 @@ impl AppState {
             .then(|| ModelLibrary::new(paths.clone()).relocate_from(&previous_dir))
             .transpose()?;
 
-        let manager =
-            DownloadManager::new(paths.clone(), HfClient::new(), self.download_sink.clone());
+        let manager = DownloadManager::new(
+            paths.clone(),
+            // Carry the client over rather than building a fresh one: its token
+            // cell is shared, so moving the model folder cannot silently drop
+            // the credential a gated download needs.
+            self.hf_client(),
+            self.download_sink.clone(),
+        );
         if let Ok(mut guard) = self.downloads.lock() {
             *guard = manager;
         }
@@ -338,6 +378,36 @@ mod tests {
         assert_eq!(
             state.downloads().expect("downloads").model_dir(),
             paths.models_dir
+        );
+    }
+
+    #[test]
+    fn a_model_dir_move_keeps_the_hugging_face_token() {
+        let state = temp_state("token-move");
+        state.set_hf_token(Secret::new("hf_testtoken_0123456789"));
+        assert!(
+            state.downloads().expect("downloads").client().has_token(),
+            "the engine starts authenticated"
+        );
+
+        let target = temp_target("token-survivor");
+        state
+            .apply_model_dir(Some(target.display().to_string()), true)
+            .expect("moved");
+        let client = state.downloads().expect("downloads").client().clone();
+        assert!(
+            client.has_token(),
+            "the rebuilt manager did not lose the credential"
+        );
+        // Clearing goes through the same shared cell the rebuild cloned.
+        state.set_hf_token(None);
+        assert!(
+            !client.has_token(),
+            "a token removed in Settings is not sent by a client that already existed"
+        );
+        assert!(
+            !format!("{client:?}").contains("testtoken"),
+            "a debug print of the engine must not carry the token"
         );
     }
 

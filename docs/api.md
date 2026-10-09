@@ -123,7 +123,7 @@ they are never stale.
 
 ## Tauri commands
 
-41 commands, all `async` but for `new_chat_session` (which mints an identity and
+44 commands, all `async` but for `new_chat_session` (which mints an identity and
 does no I/O); filesystem and `sysinfo` work moves to the blocking
 pool so the main thread never stalls. Arguments are camelCase in JavaScript and
 snake_case in Rust. Every rejection serialises to `{ code, message, detail }`.
@@ -139,6 +139,7 @@ snake_case in Rust. Every rejection serialises to `{ code, message, detail }`.
 | Benchmarks | `run_benchmark` |
 | Logs | `get_logs`, `clear_logs` |
 | Settings | `get_settings`, `save_settings`, `set_model_dir`, `reset_app_data`, `export_diagnostics` |
+| Credentials | `get_hf_token_status`, `set_hf_token`, `clear_hf_token` |
 | Files | `open_model_folder`, `open_log_folder` |
 
 `list_catalog_models` takes the whole filter bar as one `filters` object
@@ -215,6 +216,22 @@ never copy gigabytes. A move that could break live work is refused with
 transfer is still running; a cross-volume copy that would not fit reports
 `insufficient_disk_space` instead.
 
+The three credential commands are the only bridge the Hugging Face token has to
+the UI, and it is one-directional. `set_hf_token` takes the pasted token, writes it
+to the OS credential store, and returns the `TokenStatus` it read back;
+`clear_hf_token` removes it; `get_hf_token_status` reports what would be sent.
+`TokenStatus` is `{ source, masked, keychain }` — `source` is `keychain`,
+`environment` or `none`, `masked` is the first three characters and the last four
+(`hf_…wxyz`) or `null`, `keychain` says whether this build can write to a store at
+all. The whole token therefore never crosses the bridge in either direction: there
+is no command that returns it, so the webview cannot hold, render or copy it, and a
+`save_settings` payload cannot carry it either. All three run on the blocking pool
+because a keychain lookup waits on a system agent — macOS asks you to allow the
+first access an unsigned build makes. Saving a blank field is refused with
+`invalid_request` before the store is touched, and on a platform with no store
+compiled in, `set_hf_token` fails with `config_error` telling you to set `HF_TOKEN`
+rather than writing the token somewhere plain.
+
 `get_server_status` returns `running`, `host`, `port`, `baseUrl`, `engine`,
 `loadedModel`, `servedModels`, `requests`, `uptimeSeconds` and `simulated`.
 `servedModels` is the exact id list `/v1/models` offers, resident model first,
@@ -263,6 +280,7 @@ smollm models list --query qwen --sort fastest
 smollm models pull llama-3.2-1b-instruct-gguf
 smollm models local --json
 smollm models rm llama-3.2-1b-instruct-q4_k_m.gguf
+smollm auth status
 smollm run qwen2.5-0.5b-instruct-gguf --preset creative --max-tokens 128
 smollm serve --port 8123 --model qwen2.5-0.5b-instruct-gguf
 smollm bench qwen2.5-0.5b-instruct-gguf --runs 3
@@ -271,3 +289,8 @@ smollm bench qwen2.5-0.5b-instruct-gguf --runs 3
 Global flags: `--models-dir DIR`, `--verbose` (engine, download and HTTP internals
 on stderr). Most subcommands accept `--json` for scripting. `smollm serve
 --examples-only` prints the client snippets without binding a port.
+
+`auth status` prints the masked token and where it comes from; `auth set` reads the
+token from stdin — argument or pipe, never a flag, because an argument survives in
+shell history and in `ps` — and `auth clear` removes the stored one. These are the
+same two stores the desktop app uses, so a token saved either way works for both.

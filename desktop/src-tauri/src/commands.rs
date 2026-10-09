@@ -22,6 +22,7 @@ use smollm_core::model::{
     estimate_ram_gb, CatalogStatus, LocalModel, ModelDescriptor, ModelMetadata, ModelVerification,
     Relocation,
 };
+use smollm_core::secrets::{self, TokenStatus};
 use smollm_core::session::{ChatSession, ExportFormat, SessionHit, SessionIndex, SessionStore};
 use smollm_core::system::{
     AppInfo, Backend, DoctorReport, HardwareReport, LogEntry, LogFilter, LogStream, ServerConfig,
@@ -1121,6 +1122,69 @@ fn validate_model_dir(raw: &str) -> AppResult<String> {
         )));
     }
     Ok(path.display().to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Hugging Face credentials
+// ---------------------------------------------------------------------------
+
+/// Which token the download engine would send, and where it came from.
+///
+/// Reading the store is also what refreshes the engine, so a token changed or
+/// revoked elsewhere is picked up the next time Settings opens. Everything here
+/// runs on the blocking pool: a credential lookup can wait on a system agent.
+#[tauri::command]
+pub async fn get_hf_token_status(state: Shared<'_>) -> AppResult<TokenStatus> {
+    let owned = Arc::clone(&state);
+    run_blocking(move || {
+        let (token, status) = secrets::current_token();
+        owned.set_hf_token(token);
+        status
+    })
+    .await
+}
+
+/// Save a token in the OS credential store and start sending it.
+///
+/// The value goes to the store and nowhere else: not to `settings.json`, which
+/// people attach to bug reports, and not to a log line — only its mask is
+/// recorded. A blank field is refused before the store is touched.
+#[tauri::command]
+pub async fn set_hf_token(state: Shared<'_>, token: String) -> AppResult<TokenStatus> {
+    let owned = Arc::clone(&state);
+    let status = run_blocking(move || -> AppResult<TokenStatus> {
+        secrets::store_hf_token(&token)?;
+        // Read back what the store holds now, so Settings shows the source that
+        // actually won rather than what this call hoped for.
+        let (secret, status) = secrets::current_token();
+        owned.set_hf_token(secret);
+        Ok(status)
+    })
+    .await??;
+    tracing::info!(
+        target: "app",
+        source = ?status.source,
+        token = status.masked.clone().unwrap_or_else(|| "none".to_string()),
+        "hugging face token saved"
+    );
+    Ok(status)
+}
+
+/// Remove the stored token. The engine stops sending one on its next request.
+#[tauri::command]
+pub async fn clear_hf_token(state: Shared<'_>) -> AppResult<TokenStatus> {
+    let owned = Arc::clone(&state);
+    let status = run_blocking(move || -> AppResult<TokenStatus> {
+        secrets::clear_hf_token()?;
+        // An environment variable stays the user's own to unset, so the answer
+        // reports whatever is left rather than claiming the field is empty.
+        let (secret, status) = secrets::current_token();
+        owned.set_hf_token(secret);
+        Ok(status)
+    })
+    .await??;
+    tracing::info!(target: "app", source = ?status.source, "hugging face token cleared");
+    Ok(status)
 }
 
 #[tauri::command]

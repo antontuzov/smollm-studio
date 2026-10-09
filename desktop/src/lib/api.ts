@@ -48,6 +48,7 @@ import type {
   SessionHit,
   SessionIndex,
   Settings,
+  TokenStatus,
 } from "./types";
 
 /** A command rejection is an `AppError` serialised as `{ code, message, detail }`. */
@@ -145,6 +146,9 @@ export const api = {
   getSettings: () => call<Settings>("get_settings"),
   saveSettings: (settings: Settings) => call<Settings>("save_settings", { settings }),
   setModelDir: (modelDir: string) => call<Relocation>("set_model_dir", { modelDir }),
+  hfTokenStatus: () => call<TokenStatus>("get_hf_token_status"),
+  setHfToken: (token: string) => call<TokenStatus>("set_hf_token", { token }),
+  clearHfToken: () => call<TokenStatus>("clear_hf_token"),
   getPresets: () => call<SamplingPreset[]>("get_presets"),
 
   openModelFolder: () => call<string>("open_model_folder"),

@@ -174,9 +174,46 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `smollm models move DIR [--json]` is the same `relocate_from`, and is the one CLI
   command that writes `settings.json` because the files really did move; it exits
   non-zero when a file was left behind.
+- **A Hugging Face token for gated repos, kept in the OS credential store.** Llama's
+  own repositories and some of Google's answer `401` until their licence has been
+  accepted from an account that can see them, and this app had nowhere to put the
+  token that proves the account: gated entries simply failed. A new
+  `smollm-core::secrets` module reads and writes one entry — service *SmolLLM
+  Studio*, account *huggingface* — in the macOS Keychain or the Windows Credential
+  Manager, and holds the value in a `Secret` that prints its own mask from both
+  `Debug` and `Display`, so a token cannot escape into a log line by accident: the
+  mask keeps three characters from the head and four from the tail, and goes to all
+  stars below twelve, where the ends would be most of the value. The plaintext never
+  enters `settings.json`, no command returns it, and the bearer header is attached
+  only after the request's host is compared with the configured endpoint's, so the
+  CDN a download redirects to is served without it. **Settings → Hugging Face
+  access** shows where the token came from and saves or removes one; `smollm auth
+  status|set|clear` is the same three actions, and `set` reads from stdin so a token
+  never lands in shell history or in `ps`. On Linux, and in CI, the crate compiles
+  with no credential backend — a marked TODO adapter — and `HF_TOKEN` is read
+  instead. A token survives a model-folder move because the rebuilt download engine
+  clones the same client rather than re-reading the store; *Reset app data*
+  deliberately does not clear it, since that entry belongs to the OS, not to the
+  data folder.
 
 ### Fixed
 
+- **Downloads work again, after two faults that hid each other.**
+  `HfClient::resolve_url` put `resolve` before the repository —
+  `https://huggingface.co/resolve/{repo}/…`, which is not a path the hub serves —
+  while the fake Hugging Face in the transfer tests answered *any* path, so the
+  suite stayed green around a URL that could never fetch. Then Hugging Face
+  stopped serving its metadata endpoint (`/api/models/{repo}/resolve/{revision}/`
+  `{file}` now answers `404` for files it still serves), and `probe` reported that
+  as "the catalog entry may be out of date", refusing the download before it asked
+  for a byte. The client builds `{repo}/resolve/{revision}/{filename}` now, the
+  shape `ModelDescriptor::download_url` has always documented; a probe that says
+  nothing useful falls back to a HEAD of the file itself, while `401` and `403`
+  still mean an unaccepted licence, since that is the one thing only the API can
+  say; and the fake server answers only the path it really serves, so the URL is
+  pinned by a unit test and by every transfer test. A 271 MB
+  `SmolLM2-360M-Instruct-Q4_K_M.gguf` was fetched from Hugging Face and passed all
+  five integrity checks on 2026-10-09.
 - **Quant labels are the quant the file actually holds.** `general.file_type` is
   llama.cpp's `llama_ftype` *enum*, and that enum keeps holes where formats were
   removed (4–6, 33–35). The table here was a dense list, so every name from

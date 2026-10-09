@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { FolderInput, FolderOpen, Save, Settings2, Trash2 } from "lucide-react";
+import { FolderInput, FolderOpen, KeyRound, Save, Settings2, Trash2 } from "lucide-react";
 
 import { api } from "@/lib/api";
 import { exportDiagnostics, openFolder } from "@/lib/actions";
@@ -10,6 +10,7 @@ import {
   queryKeys,
   useAppInfo,
   useCatalog,
+  useHfTokenStatus,
   useLocalModels,
   usePresets,
   useSettingsQuery,
@@ -23,10 +24,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ui/dialog";
-import { Input, NumberField, Select, Switch } from "@/components/ui/field";
+import { FieldRow, Input, NumberField, Select, Switch } from "@/components/ui/field";
 import { ErrorState, Note, SkeletonList } from "@/components/ui/feedback";
 
-import type { Backend, Relocation, ResetOutcome, Settings, ThemeMode } from "@/lib/types";
+import type { Backend, Relocation, ResetOutcome, Settings, ThemeMode, TokenStatus } from "@/lib/types";
 
 const themeOptions = [
   { value: "dark", label: "Dark" },
@@ -42,10 +43,24 @@ const backendOptions: { value: Backend; label: string }[] = [
   { value: "mock", label: "Mock engine (simulated)" },
 ];
 
+/** One line saying where the live token came from, or what is still missing. */
+function tokenPlace(status: TokenStatus | undefined): string {
+  if (!status) {
+    return "Reading the credential store…";
+  }
+  if (!status.masked) {
+    return "Gated models are refused until you save one.";
+  }
+  return status.source === "keychain"
+    ? "kept in your OS credential store"
+    : "taken from HF_TOKEN, which this app only reads";
+}
+
 export function SettingsPage() {
   const settings = useSettingsQuery();
   const appInfo = useAppInfo();
   const presets = usePresets();
+  const token = useHfTokenStatus();
   const catalog = useCatalog({ query: "", sort: "recommended", hidePlaceholders: true });
   const library = useLocalModels();
   const handle = useEngine((state) => state.handle);
@@ -59,6 +74,9 @@ export function SettingsPage() {
   const [pendingMove, setPendingMove] = useState<string | null>(null);
   const [moving, setMoving] = useState(false);
   const [moveResult, setMoveResult] = useState<Relocation | null>(null);
+  const [tokenDraft, setTokenDraft] = useState("");
+  const [tokenBusy, setTokenBusy] = useState(false);
+  const [tokenFailure, setTokenFailure] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
 
   useEffect(() => {
@@ -95,6 +113,9 @@ export function SettingsPage() {
   const files = library.data ?? [];
   const libraryBytes = files.reduce((sum, model) => sum + model.sizeBytes, 0);
   const moveCount = library.isPending ? null : files.length;
+  const status = token.data;
+  // Unknown counts as unwritable only once the status has actually arrived.
+  const writable = status?.keychain;
   const leftBehind = moveResult
     ? [...moveResult.duplicates, ...moveResult.conflicts, ...moveResult.failures]
     : [];
@@ -152,6 +173,54 @@ export function SettingsPage() {
     }
   };
 
+  /**
+   * Save, then show what Rust read back from the credential store rather than
+   * what was typed: the masked ends are the only part that may reach the screen.
+   */
+  const saveToken = async () => {
+    const pasted = tokenDraft.trim();
+    if (!pasted) {
+      setTokenFailure("Paste the token first.");
+      return;
+    }
+    setTokenBusy(true);
+    setTokenFailure(null);
+    try {
+      const stored = await api.setHfToken(pasted);
+      queryClient.setQueryData(queryKeys.hfToken, stored);
+      // The field is emptied on purpose: a token that is still selectable text is
+      // a token that can be copied into a chat window.
+      setTokenDraft("");
+      toast({ title: "Token saved in your credential store", variant: "success" });
+    } catch (error) {
+      setTokenFailure(describeError(error));
+    } finally {
+      setTokenBusy(false);
+    }
+  };
+
+  const removeToken = async () => {
+    setTokenBusy(true);
+    setTokenFailure(null);
+    try {
+      const left = await api.clearHfToken();
+      queryClient.setQueryData(queryKeys.hfToken, left);
+      // A `HF_TOKEN` in the environment is not ours to delete, and the status
+      // Rust returns says whether something is still being sent.
+      toast({
+        title: "Stored token removed",
+        description: left.masked
+          ? `A token still comes from ${left.source === "environment" ? "HF_TOKEN" : "the store"}.`
+          : "Gated models will be refused again.",
+        variant: "default",
+      });
+    } catch (error) {
+      setTokenFailure(describeError(error));
+    } finally {
+      setTokenBusy(false);
+    }
+  };
+
   const reset = async () => {
     setResetting(true);
     setFailure(null);
@@ -176,7 +245,7 @@ export function SettingsPage() {
     <>
       <PageHeader
         title="Settings"
-        description="Everything is stored as plain JSON in the data folder and applied when you press Save. Nothing is sent anywhere."
+        description="Settings are plain JSON in the data folder and applied when you press Save; a Hugging Face token is the one thing kept in your OS credential store instead. Nothing is sent anywhere."
         icon={Settings2}
         sticky
         actions={
@@ -366,6 +435,77 @@ export function SettingsPage() {
           </CardContent>
         </Card>
 
+        <Card>
+          <CardHeader
+            title="Hugging Face access"
+            description="Gated models need a token; everything else in the catalog does not."
+          />
+          <CardContent className="space-y-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge tone={status?.masked ? "success" : "neutral"}>
+                {status?.masked ?? "no token"}
+              </Badge>
+              <span className="text-xs text-muted-foreground">{tokenPlace(status)}</span>
+            </div>
+            <FieldRow
+              label={status?.masked ? "Replace the token" : "Access token"}
+              hint="Make a fine-grained token at huggingface.co/settings/tokens that may read gated repositories. It goes into your OS credential store, never into settings.json, and is sent only to huggingface.co — a redirect to a CDN is served without it."
+              htmlFor="hf-token"
+            >
+              <Input
+                id="hf-token"
+                type="password"
+                value={tokenDraft}
+                onChange={(event) => setTokenDraft(event.target.value)}
+                placeholder="hf_…"
+                autoComplete="off"
+                spellCheck={false}
+                disabled={tokenBusy || writable === false}
+              />
+            </FieldRow>
+            {token.isError ? (
+              <ErrorState
+                message="The credential store could not be read"
+                detail={describeError(token.error)}
+                onRetry={() => void token.refetch()}
+              />
+            ) : null}
+            {tokenFailure ? (
+              <ErrorState message="The token was not saved" detail={tokenFailure} />
+            ) : null}
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                onClick={() => void saveToken()}
+                disabled={tokenBusy || writable === false}
+              >
+                <KeyRound />
+                {tokenBusy ? "Working…" : status?.masked ? "Replace token" : "Save token"}
+              </Button>
+              {status?.masked ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void removeToken()}
+                  disabled={tokenBusy}
+                >
+                  <Trash2 />
+                  Remove
+                </Button>
+              ) : null}
+            </div>
+            {writable === false ? (
+              <Note tone="warning">
+                <p>
+                  This build compiles no credential store for your platform, so the field above cannot
+                  save. Export <span className="font-mono text-[11px]">HF_TOKEN</span> instead — it is
+                  read the same way and goes to the same host.
+                </p>
+              </Note>
+            ) : null}
+          </CardContent>
+        </Card>
+
         <Card className="xl:col-span-2">
           <CardHeader title="Data and privacy" description="Where things live, and how to get them out." />
           <CardContent className="space-y-4">
@@ -483,7 +623,7 @@ export function SettingsPage() {
         open={showReset}
         onOpenChange={setShowReset}
         title="Reset app data?"
-        description="Settings return to their defaults and the in-memory log buffer is cleared. Model files are kept — nothing you downloaded is thrown away."
+        description="Settings return to their defaults and the in-memory log buffer is cleared. Model files are kept — nothing you downloaded is thrown away — and so is a Hugging Face token, which lives in your OS credential store rather than in this folder; remove it from the Hugging Face access card if you want it gone."
         confirmLabel="Reset settings"
         destructive
         pending={resetting}

@@ -72,6 +72,20 @@ pub fn run() {
             app.manage(Arc::clone(&state));
 
             tasks::pump_downloads(handle, receiver);
+            // A credential lookup waits on the OS agent — macOS asks the user to
+            // allow the first access an unsigned build makes — so it happens on
+            // the blocking pool, not between launch and the first window.
+            {
+                let state = Arc::clone(&state);
+                tauri::async_runtime::spawn_blocking(move || {
+                    let found = state.sync_hf_token();
+                    tracing::info!(
+                        target: "app",
+                        configured = found,
+                        "hugging face credential checked"
+                    );
+                });
+            }
             tracing::info!(
                 target: "app",
                 version = %app.package_info().version,
@@ -117,6 +131,9 @@ pub fn run() {
             commands::get_settings,
             commands::save_settings,
             commands::set_model_dir,
+            commands::get_hf_token_status,
+            commands::set_hf_token,
+            commands::clear_hf_token,
             commands::get_presets,
             commands::open_model_folder,
             commands::open_log_folder,

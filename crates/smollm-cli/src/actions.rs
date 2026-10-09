@@ -3,7 +3,7 @@
 //! Every function here calls the same crates the desktop app calls, so the CLI
 //! is a second surface rather than a second implementation.
 
-use std::io::{Read, Write};
+use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -17,6 +17,7 @@ use smollm_core::config::Settings;
 use smollm_core::model::{
     estimate_ram_gb, CatalogStatus, CheckStatus, LocalModel, ModelDescriptor, ModelMetadata,
 };
+use smollm_core::secrets::{self, TokenSource};
 use smollm_core::system::{HardwareReport, ServerConfig};
 use smollm_core::AppPaths;
 use smollm_engine::{benchmark, BenchmarkConfig, EngineKind, EngineManager};
@@ -275,7 +276,13 @@ pub async fn pull(ctx: &Context, raw: &str, force: bool) -> Result<()> {
     }
 
     let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-    let manager = DownloadManager::new(ctx.paths.clone(), HfClient::new(), sender);
+    // The same credential rule as the app: the token comes from the OS store, or
+    // from HF_TOKEN, and only ever goes to the host it was written for.
+    let manager = DownloadManager::new(
+        ctx.paths.clone(),
+        HfClient::new().with_token(secrets::hf_token()),
+        sender,
+    );
     println!(
         "Downloading {} ({} MB) into {}",
         descriptor.filename,
@@ -497,6 +504,82 @@ fn status_word(status: CheckStatus) -> &'static str {
         CheckStatus::Passed => "passed",
         CheckStatus::Failed => "FAILED",
         CheckStatus::Skipped => "skipped",
+    }
+}
+
+// ---------------------------------------------------------------------------
+// credentials
+// ---------------------------------------------------------------------------
+
+/// `smollm auth status`: which token would be sent, and never what it is.
+pub fn auth_status(json: bool) -> Result<()> {
+    let status = secrets::token_status();
+    if json {
+        return print_json(&status);
+    }
+    match status.masked.as_deref() {
+        Some(masked) => {
+            println!("A Hugging Face token is in use: {masked}");
+            println!("  Where it comes from: {}", source_place(status.source));
+            println!(
+                "  Only the ends are printed; a token is never echoed by this command."
+            );
+        }
+        None => println!(
+            "No Hugging Face token.\n  Gated repositories will be refused. Save one with `smollm auth set`,\n  or export HF_TOKEN."
+        ),
+    }
+    if !status.keychain {
+        println!(
+            "  This build compiles no credential store for this platform, so a token is\n  read from HF_TOKEN but not written by `smollm auth set`."
+        );
+    }
+    Ok(())
+}
+
+/// `smollm auth set`: read the token from stdin, never from an argument.
+///
+/// A token in argv shows up in `ps` and stays in shell history; stdin does not.
+/// Works piped (`cat token | smollm auth set`) or typed at the prompt.
+pub fn auth_set() -> Result<()> {
+    let stdin = std::io::stdin();
+    if stdin.is_terminal() {
+        // A terminal echoes what is typed, which is worth saying out loud rather
+        // than pretending a line read is a secure password prompt.
+        eprint!("Paste the token and press Enter (this terminal echoes it): ");
+        std::io::stderr().flush()?;
+    }
+    let mut line = String::new();
+    if stdin.read_line(&mut line)? == 0 {
+        bail!("no token was given; paste it at the prompt or pipe it in");
+    }
+    secrets::store_hf_token(&line)?;
+    let masked = secrets::token_status()
+        .masked
+        .unwrap_or_else(|| "hidden".to_string());
+    println!("Saved in the OS credential store: {masked}");
+    println!("  It is sent only to huggingface.co, and never written to settings.json.");
+    Ok(())
+}
+
+/// `smollm auth clear`: remove the stored token.
+pub fn auth_clear() -> Result<()> {
+    secrets::clear_hf_token()?;
+    match secrets::token_status().masked {
+        Some(masked) => println!(
+            "Removed the stored token.\n  HF_TOKEN is still set, so a token is still sent: {masked}\n  Unset that variable to stop sending one."
+        ),
+        None => println!("Removed the stored token. No credential will be sent."),
+    }
+    Ok(())
+}
+
+fn source_place(source: TokenSource) -> &'static str {
+    match source {
+        TokenSource::Keychain => "the OS credential store",
+        TokenSource::Environment => "the HF_TOKEN variable",
+        // A token always has a source, so this arm only keeps the match total.
+        TokenSource::None => "nowhere",
     }
 }
 

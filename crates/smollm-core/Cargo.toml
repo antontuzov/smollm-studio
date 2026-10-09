@@ -17,3 +17,11 @@ uuid.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+
+# Each platform gets exactly one credential store, so the other platform's
+# bindings are not even in this build's dependency graph.
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { workspace = true, features = ["apple-native"] }
+
+[target.'cfg(windows)'.dependencies]
+keyring = { workspace = true, features = ["windows-native"] }

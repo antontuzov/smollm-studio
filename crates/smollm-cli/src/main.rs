@@ -52,6 +52,9 @@ enum Command {
     /// Browse the curated catalog and the local library.
     #[command(subcommand)]
     Models(ModelsCommand),
+    /// The Hugging Face token used for gated models.
+    #[command(subcommand)]
+    Auth(AuthCommand),
     /// Load a model and answer one prompt.
     Run(RunArgs),
     /// Serve an OpenAI-compatible API on localhost.
@@ -117,6 +120,22 @@ enum ModelsCommand {
         #[arg(value_name = "FILE")]
         file: String,
     },
+}
+
+#[derive(Subcommand)]
+enum AuthCommand {
+    /// Show which Hugging Face token would be sent, with its middle hidden.
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Save a Hugging Face token in the OS credential store.
+    ///
+    /// The token is read from stdin, never from an argument: an argument lands in
+    /// shell history and shows up in `ps`. Pipe it in or paste it when asked.
+    Set,
+    /// Remove the stored token.
+    Clear,
 }
 
 #[derive(Args)]
@@ -226,6 +245,9 @@ async fn main() -> Result<()> {
             actions::move_library(&ctx, &dir, json)
         }
         Command::Models(ModelsCommand::Rm { file }) => actions::remove(&ctx, &file),
+        Command::Auth(AuthCommand::Status { json }) => actions::auth_status(json),
+        Command::Auth(AuthCommand::Set) => actions::auth_set(),
+        Command::Auth(AuthCommand::Clear) => actions::auth_clear(),
         Command::Run(args) => actions::run(&mut ctx, &args).await,
         Command::Serve(args) => actions::serve(&mut ctx, &args).await,
         Command::Bench(args) => actions::bench(&mut ctx, &args).await,

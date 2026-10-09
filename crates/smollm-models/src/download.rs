@@ -14,6 +14,7 @@ use smollm_core::error::{AppError, AppResult};
 use smollm_core::gguf::GgufHeader;
 use smollm_core::model::ModelDescriptor;
 use smollm_core::paths::AppPaths;
+use smollm_core::secrets::Secret;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 
@@ -187,6 +188,14 @@ impl DownloadManager {
         &self.paths.models_dir
     }
 
+    /// The client transfers go through.
+    ///
+    /// Cloning it shares the token cell rather than copying a credential, which
+    /// is what lets a rebuilt manager keep working without a second keychain read.
+    pub fn client(&self) -> &HfClient {
+        &self.client
+    }
+
     pub fn snapshot(&self) -> Vec<DownloadTask> {
         let mut tasks: Vec<DownloadTask> = self
             .tasks
@@ -212,6 +221,16 @@ impl DownloadManager {
             .lock()
             .map(|guard| guard.values().any(|task| task.state.is_active()))
             .unwrap_or(false)
+    }
+
+    /// Hand the transfer engine a new Hugging Face token.
+    ///
+    /// The manager keeps one client whose token cell is shared with every clone,
+    /// so a token saved in Settings applies to the next request of an already
+    /// queued download; the running transfer of the same file is deliberately
+    /// left alone rather than restarted behind the user.
+    pub fn set_hf_token(&self, token: Option<Secret>) {
+        self.client.set_token(token);
     }
 
     pub fn task_for_model(&self, model_id: &str) -> Option<DownloadTask> {
@@ -329,9 +348,10 @@ impl DownloadManager {
             }
         };
         if remote.requires_consent() {
-            return Err(AppError::DownloadFailed(format!(
-                "{} requires Hugging Face consent (HTTP {}). Accept the model licence on huggingface.co or choose another catalog entry.",
-                model.display_name, remote.status
+            return Err(AppError::DownloadFailed(consent_message(
+                &model.display_name,
+                remote.status,
+                self.client.has_token(),
             )));
         }
         if !remote.is_available() {
@@ -631,7 +651,6 @@ impl Runner {
 
         let request = self
             .client
-            .http()
             .get(&self.task.url)
             .header(reqwest::header::ACCEPT, "application/octet-stream");
         let request = match (&if_range, offset) {
@@ -656,9 +675,10 @@ impl Runner {
         let status = response.status();
         let code = status.as_u16();
         if matches!(code, 401 | 403) {
-            return Err(Failure::fatal(AppError::DownloadFailed(format!(
-                "{} requires Hugging Face consent (HTTP {code}). Accept the model licence on huggingface.co or choose another catalog entry.",
-                self.task.display_name
+            return Err(Failure::fatal(AppError::DownloadFailed(consent_message(
+                &self.task.display_name,
+                code,
+                self.client.has_token(),
             ))));
         }
         if matches!(code, 404 | 410) {
@@ -1157,6 +1177,21 @@ pub fn free_space(path: &Path) -> AppResult<u64> {
     )))
 }
 
+/// A 401/403 worded for whether a token is held, because the fix differs: with
+/// no token the user has to save one, with a token the account behind it cannot
+/// see this file.
+fn consent_message(display_name: &str, status: u16, has_token: bool) -> String {
+    if has_token {
+        format!(
+            "{display_name} refused the saved Hugging Face token (HTTP {status}). Accept the model licence with that account on huggingface.co, replace the token, or choose another catalog entry."
+        )
+    } else {
+        format!(
+            "{display_name} is gated and needs a Hugging Face account (HTTP {status}). Save an access token - Settings -> Hugging Face access, or `smollm auth set` - accept the licence on huggingface.co, then download again."
+        )
+    }
+}
+
 /// Reject anything that could escape the model directory.
 pub fn sanitize_file_name(raw: &str) -> AppResult<String> {
     let trimmed = raw.trim();
@@ -1381,16 +1416,20 @@ mod tests {
     // they ship instead of being simulated.
 
     /// How the fake endpoint should answer.
-    #[derive(Clone, Copy)]
+    #[derive(Clone)]
     struct Script {
         /// Reply 206 to a `Range` request, as Hugging Face does.
         honours_range: bool,
         /// Kill the first file request after this many body bytes.
         cut_first: Option<usize>,
-        /// Refuse, as a gated repository does.
-        gated: bool,
+        /// A gated repository: every request without this bearer token is
+        /// refused, and the token is only ever matched against this value.
+        requires_token: Option<&'static str>,
         /// Serve HTML of the declared length instead of a model.
         not_gguf: bool,
+        /// Answer the metadata probe with this status instead of usable JSON,
+        /// which is what Hugging Face does to that endpoint today.
+        probe_status: Option<u16>,
         etag: &'static str,
     }
 
@@ -1399,8 +1438,9 @@ mod tests {
             Self {
                 honours_range: true,
                 cut_first: None,
-                gated: false,
+                requires_token: None,
                 not_gguf: false,
+                probe_status: None,
                 etag: "first-etag",
             }
         }
@@ -1450,17 +1490,41 @@ mod tests {
         bytes
     }
 
+    /// The value of a header, skipping the request line and any header without a
+    /// colon rather than giving up on the whole parse.
+    fn header<'a>(request: &'a str, name: &str) -> Option<&'a str> {
+        request.lines().find_map(|line| {
+            let (found, value) = line.split_once(':')?;
+            found
+                .trim()
+                .eq_ignore_ascii_case(name)
+                .then_some(value.trim())
+        })
+    }
+
     /// The start a `Range: bytes=N-` header asked for.
     fn requested_start(request: &str) -> Option<u64> {
-        for line in request.lines() {
-            let (name, value) = line.split_once(':')?;
-            if !name.trim().eq_ignore_ascii_case("range") {
-                continue;
-            }
-            let spec = value.trim().strip_prefix("bytes=")?.split('-').next()?;
-            return spec.parse().ok();
-        }
-        None
+        let spec = header(request, "range")?
+            .strip_prefix("bytes=")?
+            .split('-')
+            .next()?;
+        spec.parse().ok()
+    }
+
+    /// The bearer token a request carries, if it carries one at all.
+    fn bearer(request: &str) -> Option<&str> {
+        let value = header(request, "authorization")?;
+        let (scheme, token) = value.split_once(' ')?;
+        scheme
+            .eq_ignore_ascii_case("bearer")
+            .then_some(token.trim())
+            .filter(|token| !token.is_empty())
+    }
+
+    /// The path from a request line, which is the only place the shape of a
+    /// download URL can be checked.
+    fn request_path(request: &str) -> Option<&str> {
+        request.lines().next()?.split_whitespace().nth(1)
     }
 
     /// Answer one request per connection until the test binary exits.
@@ -1491,31 +1555,61 @@ mod tests {
                 }
                 let text = String::from_utf8_lossy(&raw).to_string();
                 let is_probe = text.starts_with("GET /api/");
-                if !is_probe {
+                let is_head = text.starts_with("HEAD ");
+                if !is_probe && !is_head {
                     gets += 1;
                 }
-                let first_get = !is_probe && gets == 1;
+                let first_get = !is_probe && !is_head && gets == 1;
                 if let Ok(mut log) = seen.lock() {
                     log.push(text.clone());
                 }
 
-                let reply = if is_probe {
-                    if script.gated {
-                        response("401 Unauthorized", &[], b"", 0)
-                    } else {
-                        let json = format!(
-                            "{{\"size\":{full},\"etag\":\"\\\"{}\\\"\",\"commitHash\":\"c0ffee\"}}",
-                            script.etag
-                        );
-                        response(
-                            "200 OK",
-                            &["content-type: application/json".to_string()],
-                            json.as_bytes(),
-                            json.len(),
-                        )
-                    }
-                } else if script.gated {
+                let authorized = match script.requires_token {
+                    None => true,
+                    Some(wanted) => bearer(&text).is_some_and(|sent| sent == wanted),
+                };
+                let reply = if !authorized {
                     response("401 Unauthorized", &[], b"", 0)
+                } else if !is_probe
+                    && request_path(&text) != Some("/test/repo/resolve/main/test-q4_k_m.gguf")
+                {
+                    // Answering any path at all is how a download URL built in the
+                    // wrong order -- `/resolve/{repo}/…`, which the hub answers
+                    // `404` for -- passed this suite while failing in the app.
+                    response("404 Not Found", &[], b"not here", 8)
+                } else if is_head {
+                    // The probe fallback: length and etag, no body, as a real
+                    // HEAD of the resolve URL answers.
+                    response(
+                        "200 OK",
+                        &[
+                            format!("etag: \"{}\"", script.etag),
+                            "accept-ranges: bytes".to_string(),
+                        ],
+                        b"",
+                        full,
+                    )
+                } else if is_probe {
+                    match script.probe_status {
+                        Some(status) => response(
+                            &format!("{status} Not Found"),
+                            &["content-type: application/json".to_string()],
+                            b"{\"error\":\"not here\"}",
+                            21,
+                        ),
+                        None => {
+                            let json = format!(
+                                "{{\"size\":{full},\"etag\":\"\\\"{}\\\"\",\"commitHash\":\"c0ffee\"}}",
+                                script.etag
+                            );
+                            response(
+                                "200 OK",
+                                &["content-type: application/json".to_string()],
+                                json.as_bytes(),
+                                json.len(),
+                            )
+                        }
+                    }
                 } else {
                     let start = if script.honours_range {
                         requested_start(&text).filter(|from| *from < full as u64)
@@ -1823,7 +1917,7 @@ mod tests {
         let harness = harness(
             body,
             Script {
-                gated: true,
+                requires_token: Some("server-side-token"),
                 ..Script::default()
             },
         )
@@ -1833,16 +1927,122 @@ mod tests {
             .manager
             .pull(&harness.descriptor(), None)
             .await
-            .expect_err("gated models cannot be downloaded");
+            .expect_err("gated models cannot be downloaded without a token");
         assert!(
-            error.to_string().contains("consent"),
-            "the message must say what to do: {error}"
+            error.to_string().contains("Settings"),
+            "the message has to name where the token goes: {error}"
         );
         let files: Vec<_> = std::fs::read_dir(&harness.models_dir)
             .expect("dir")
             .filter_map(Result::ok)
             .collect();
         assert!(files.is_empty(), "nothing is written for a gated model");
+    }
+
+    #[tokio::test]
+    async fn a_saved_token_unlocks_the_gated_repo() {
+        let body = gguf_body(3_000);
+        let mut harness = harness(
+            body.clone(),
+            Script {
+                requires_token: Some("server-side-token"),
+                ..Script::default()
+            },
+        )
+        .await;
+        // The token arrives through the manager, exactly as a Settings change
+        // delivers it to a client that was built before the token existed.
+        harness
+            .manager
+            .set_hf_token(Secret::new("server-side-token"));
+
+        harness
+            .manager
+            .pull(&harness.descriptor(), None)
+            .await
+            .expect("starts once the repo accepts the bearer");
+        let events = harness.settle().await;
+        assert!(
+            matches!(events.last(), Some(DownloadEvent::Completed(_))),
+            "{}",
+            failure_reason(&events)
+        );
+        assert_eq!(std::fs::read(harness.final_path()).expect("file"), body);
+        let authorised = harness
+            .log()
+            .iter()
+            .filter(|request| bearer(request) == Some("server-side-token"))
+            .count();
+        // The metadata probe and the file request both need it.
+        assert_eq!(
+            authorised,
+            2,
+            "every request to our own host carries the token: {:?}",
+            harness.log()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_token_the_server_rejects_says_so() {
+        let body = gguf_body(3_000);
+        let harness = harness(
+            body,
+            Script {
+                requires_token: Some("server-side-token"),
+                ..Script::default()
+            },
+        )
+        .await;
+        harness.manager.set_hf_token(Secret::new("an-old-token"));
+
+        let error = harness
+            .manager
+            .pull(&harness.descriptor(), None)
+            .await
+            .expect_err("a stale token is not a pass");
+        assert!(
+            error.to_string().contains("refused the saved"),
+            "the message must not ask for a token that is already there: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_dead_metadata_endpoint_does_not_block_the_download() {
+        let body = gguf_body(3_000);
+        let mut harness = harness(
+            body.clone(),
+            Script {
+                probe_status: Some(404),
+                ..Script::default()
+            },
+        )
+        .await;
+
+        // This is what Hugging Face does today to its `/api/models/.../resolve/`
+        // path even for files it still serves, and reading that as a missing
+        // catalog entry refused every download the app made.
+        harness
+            .manager
+            .pull(&harness.descriptor(), None)
+            .await
+            .expect("the file's own headers answer for the metadata endpoint");
+        let events = harness.settle().await;
+        assert!(
+            matches!(events.last(), Some(DownloadEvent::Completed(_))),
+            "{}",
+            failure_reason(&events)
+        );
+        assert_eq!(std::fs::read(harness.final_path()).expect("file"), body);
+        assert!(
+            // The harness logs requests lower-cased.
+            harness.log().iter().any(|request| {
+                request
+                    .strip_prefix("head ")
+                    .is_some_and(|path| path.starts_with("/test/repo/resolve/"))
+            }),
+            "the fallback never asked the file itself: {:?}",
+            harness.log()
+        );
     }
 
     #[tokio::test]

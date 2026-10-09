@@ -47,9 +47,17 @@ If it fails at exactly the same offset twice, the remote file has probably
 changed; the app discards the mismatched partial by itself when the recorded
 `ETag` or URL differs, so a plain retry is usually enough.
 
-A message about *consent* or an *Accept licence* means the repo is gated: sign in
-on huggingface.co, accept the model licence, and retry. A `404` means the
-filename or revision in the catalog no longer exists upstream.
+A message that a model *is gated and needs a Hugging Face account* means the repo
+requires you to be signed in: accept the licence on the model page, put an access
+token in **Settings → Hugging Face access** (or run `smollm auth set`), then press
+**Retry** — the download engine picks up a token saved mid-session. A `404` is
+now only a real missing file: the metadata endpoint is asked first, and when it
+says nothing the file's own headers are checked before the download is refused.
+
+If the message says the saved token was *refused*, the credential is already being
+sent and the account behind it is the problem: it has not accepted that licence, the
+token cannot read gated repositories, or it has expired. Replace it with one that
+can, or pick a catalog entry that needs none.
 
 ## `download_cancelled`
 

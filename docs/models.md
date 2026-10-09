@@ -152,6 +152,51 @@ because files that moved while the app still named the old folder would look lik
 an emptied library. `--json` prints the report; the command exits non-zero when a
 file was left behind.
 
+## Gated models and your token
+
+Most of the catalog is public: pressing Download sends no credential of any kind.
+A few repositories — Llama's own, some of Google's — require you to be signed in
+and to have accepted their licence. Those answer `401` until the request carries a
+Hugging Face access token.
+
+Settings has a **Hugging Face access** card for exactly that: paste a
+[fine-grained token](https://huggingface.co/settings/tokens) that may read gated
+repositories and press **Save token**. Three things follow from how it is stored:
+
+| What happens | Where |
+| --- | --- |
+| The token is written to the macOS Keychain / Windows Credential Manager | never to `settings.json` |
+| Only its ends are ever shown or logged (`hf_…wxyz`) | the full value cannot be read back in the app |
+| It is attached to requests aimed at the host it was saved for | a redirect to a CDN goes without it |
+
+Removing it is the **Remove** button next to the field, and nothing else about
+your setup changes. **Reset app data** leaves the credential store alone: a token
+is removed when you press Remove, not as a side effect of clearing settings.
+
+Terminal: the same store is what the CLI reads, so a token saved in the app works
+for `smollm models pull` too.
+
+```console
+$ smollm auth status          # which token is live, middle hidden
+$ smollm auth set             # reads the token from stdin, then stores it
+$ smollm auth clear           # forgets it again
+```
+
+`auth set` takes the token from stdin rather than an argument on purpose: an
+argument stays in your shell history and shows up in `ps`. Piping
+(`cat token.txt | smollm auth set`) works the same as typing it at the prompt.
+
+Where a platform has no credential store compiled into this build — Linux, and
+any CI runner — the field in Settings says so and `auth set` refuses rather than
+writing a plain-text file. `HF_TOKEN` (or `HUGGING_FACE_HUB_TOKEN`) is read there
+instead, which keeps the token in your environment rather than on disk.
+
+A gated failure is reported before any byte is written, and the sentence names the
+fix: it says the model is gated, that a token belongs in Settings → Hugging Face
+access or `smollm auth set`, and that the licence itself has to be accepted on the
+model page. Once a token is saved, **Retry** on the failed transfer carries it —
+the running download engine picks up the new credential without a restart.
+
 ## Downloads
 
 A transfer is a small state machine: *queued → running → (retrying)* →
@@ -187,10 +232,13 @@ automatically up to four times with capped backoff, and honour `Retry-After` whe
 the server sends it. The Transfers row shows *retrying (attempt 2 of 4)* in amber
 instead of pretending the download died; cancel still works while the task waits
 between attempts. Authoritative sizes and digests come from the Hugging Face file
-metadata endpoint; if that endpoint is unreachable, the download continues with
-the catalog's own estimate and the size check becomes best-effort, so an API
-outage does not make the app useless offline. Consent-gated repos fail with a
-message that says to accept the licence rather than a bare `401`.
+metadata endpoint; when that endpoint answers nothing useful — which today it
+does, `404` for files the hub still serves — the file itself is asked with a HEAD
+and its own length and `ETag` are used, and only if that also fails does the
+download fall back to the catalog's estimate, so a moved API path cannot refuse a
+model that is plainly there. A gated repo answers `401`, and the
+message says where the token belongs rather than being a bare status code — see
+[Gated models and your token](#gated-models-and-your-token).
 
 **Cancel, retry, disk.** Cancel is cooperative: the transfer loop checks a flag
 between chunks, keeps the partial, and emits *cancelled*. Retry re-enters the

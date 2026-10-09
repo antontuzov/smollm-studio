@@ -25,6 +25,7 @@ export const queryKeys = {
   serverExamples: (modelId: string) => ["server-examples", modelId] as const,
   logs: ["logs"] as const,
   settings: ["settings"] as const,
+  hfToken: ["hf-token"] as const,
   presets: ["presets"] as const,
 };
 
@@ -104,6 +105,17 @@ export function useSettingsQuery() {
 
 export function usePresets() {
   return useQuery({ queryKey: queryKeys.presets, queryFn: api.getPresets, staleTime: Infinity });
+}
+
+/**
+ * Which Hugging Face token the engine would send.
+ *
+ * Reading it asks the OS credential store, so the answer is cached until the app
+ * changes it: saving and removing both replace this entry with what Rust read
+ * back.
+ */
+export function useHfTokenStatus() {
+  return useQuery({ queryKey: queryKeys.hfToken, queryFn: api.hfTokenStatus, staleTime: Infinity });
 }
 
 /** Saved conversations, newest edit first. */

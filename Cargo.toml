@@ -60,6 +60,13 @@ sha2 = "0.10"
 hex = "0.4"
 walkdir = "2"
 
+# --- credentials ---
+# The platform's own store, and nothing else: no store feature is enabled here
+# because the two that work on Linux need either a D-Bus session server or a C
+# library, and a Hugging Face token is only worth a dependency on the platforms
+# this app ships bundles for. See smollm-core's target-specific dependencies.
+keyring = { version = "3.6", default-features = false }
+
 # --- misc ---
 uuid = { version = "1", features = ["v4", "serde"] }
 clap = { version = "4", features = ["derive"] }

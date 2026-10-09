@@ -202,6 +202,20 @@ export interface Relocation {
   failures: string[];
 }
 
+/** Where the token the app sends came from. */
+export type TokenSource = "keychain" | "environment" | "none";
+
+/**
+ * The Hugging Face token as the UI is allowed to see it: which one is live by
+ * its ends, and nothing that could be used to download as you.
+ */
+export interface TokenStatus {
+  source: TokenSource;
+  masked: string | null;
+  /** Whether this platform has a credential store this build can write to. */
+  keychain: boolean;
+}
+
 export type DownloadState =
   | "queued"
   | "running"

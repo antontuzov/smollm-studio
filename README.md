@@ -95,7 +95,9 @@ library is a contained change:
   every model card says whether it fits *right now*.
 - **Local by default, provably.** Loopback-only server, plain JSON settings on
   disk, one data folder you can open from the app, and a diagnostics export for
-  bug reports.
+  bug reports. The one secret the app can hold — a Hugging Face token — goes to
+  the OS credential store instead of `settings.json`, is only ever printed with
+  its middle hidden, and is sent to no host but the one it was written for.
 - **Two surfaces, one core.** The desktop app and the CLI are both thin shells
   over the same five crates. Anything you can do in the UI you can script.
 - **Premium, not heavy.** Rust and Tauri: no bundled Chromium, no Python
@@ -137,6 +139,7 @@ smollm models pull qwen2.5-0.5b-instruct-gguf
 smollm models import ~/Downloads/MyModel-Q4_K_M.gguf   # a file you already have
 smollm models verify                # is every file in the library still whole?
 smollm models move /Volumes/fast/Models   # put the library somewhere else, files and all
+smollm auth status                # which Hugging Face token would be sent, middle hidden
 smollm run qwen2.5-0.5b-instruct-gguf --prompt "Explain GGUF in two sentences"
 smollm serve --port 8123            # OpenAI-compatible API on loopback
 ```
@@ -238,6 +241,14 @@ its own header. Out of room on the boot volume? **Settings → Models and engine
 Move** takes the library to another disk with it — renamed when it can be, proved
 by header when it has to be copied, and never overwriting a file it finds there.
 Model licenses differ — check the card if you plan to ship something.
+
+A handful of repositories are gated: Llama's own, and some of Google's, answer
+`401` until you have accepted their licence and are signed in. **Settings →
+Hugging Face access** holds a fine-grained token for those, kept in the macOS
+Keychain or the Windows Credential Manager rather than in a settings file, shown
+only by its ends, and attached to no request but one aimed at `huggingface.co` —
+the CDN a download redirects to is served without it. `smollm auth set` writes the
+same entry from a terminal. Every other catalog entry needs no credential at all.
 
 ## Hardware recommendations
 
