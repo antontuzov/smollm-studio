@@ -162,7 +162,7 @@ powershell -File scripts/install.ps1  # Windows -> %LOCALAPPDATA%\Programs\smoll
 You need Rust 1.77+, Node 20+ with corepack, and pnpm 9.
 
 ```bash
-git clone https://github.com/smollm-studio/smollm-studio
+git clone https://github.com/antontuzov/smollm-studio
 cd smollm-studio
 
 # 1. Rust workspace: engine, catalog, downloader, server, CLI

@@ -16,8 +16,8 @@ edition = "2021"
 rust-version = "1.77"
 license = "MIT"
 authors = ["SmolLLM Studio contributors"]
-repository = "https://github.com/smollm-studio/smollm-studio"
-homepage = "https://github.com/smollm-studio/smollm-studio"
+repository = "https://github.com/antontuzov/smollm-studio"
+homepage = "https://github.com/antontuzov/smollm-studio"
 
 [workspace.dependencies]
 # --- internal crates ---

@@ -32,7 +32,7 @@ Windows 10 machines.
 ### From source
 
 ```bash
-git clone https://github.com/smollm-studio/smollm-studio
+git clone https://github.com/antontuzov/smollm-studio
 cd smollm-studio/desktop
 corepack enable && pnpm install
 pnpm tauri dev

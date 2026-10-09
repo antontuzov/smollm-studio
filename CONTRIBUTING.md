@@ -16,7 +16,7 @@ You need:
   <https://tauri.app/start/prerequisites/>
 
 ```bash
-git clone https://github.com/smollm-studio/smollm-studio
+git clone https://github.com/antontuzov/smollm-studio
 cd smollm-studio
 cargo build                          # workspace libraries + the smollm CLI
 cd desktop && pnpm install           # frontend deps

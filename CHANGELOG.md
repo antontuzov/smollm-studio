@@ -397,4 +397,4 @@ GGUF models locally — and it is honest about which parts do real inference.
   never loaded into an engine in this version.
 - Linux is not a supported target yet (macOS and Windows only).
 
-[0.1.0]: https://github.com/smollm-studio/smollm-studio/releases/tag/v0.1.0
+[0.1.0]: https://github.com/antontuzov/smollm-studio/releases/tag/v0.1.0
