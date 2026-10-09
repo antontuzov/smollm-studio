@@ -123,7 +123,7 @@ they are never stale.
 
 ## Tauri commands
 
-38 commands, all `async` but for `new_chat_session` (which mints an identity and
+39 commands, all `async` but for `new_chat_session` (which mints an identity and
 does no I/O); filesystem and `sysinfo` work moves to the blocking
 pool so the main thread never stalls. Arguments are camelCase in JavaScript and
 snake_case in Rust. Every rejection serialises to `{ code, message, detail }`.
@@ -131,7 +131,7 @@ snake_case in Rust. Every rejection serialises to `{ code, message, detail }`.
 | Area | Commands |
 | --- | --- |
 | Machine | `detect_hardware`, `get_app_info`, `get_doctor_report` |
-| Models | `list_catalog_models`, `catalog_facets`, `list_local_models`, `pull_model`, `cancel_download`, `retry_download`, `get_download_snapshot`, `delete_local_model` |
+| Models | `list_catalog_models`, `catalog_facets`, `list_local_models`, `pull_model`, `cancel_download`, `retry_download`, `get_download_snapshot`, `delete_local_model`, `import_model` |
 | Engine | `load_model`, `unload_model`, `get_engine_metrics`, `get_presets` |
 | Chat | `start_chat_stream`, `stop_generation` |
 | Conversations | `new_chat_session`, `save_chat_session`, `list_chat_sessions`, `search_chat_sessions`, `get_chat_session`, `rename_chat_session`, `delete_chat_session`, `export_chat_session` |
@@ -175,6 +175,17 @@ transcript is reported, never silently dropped from the list.
 `markdown` or `json` and returns the path written, so the OS save panel decides
 where a conversation goes. Ids are restricted to `[A-Za-z0-9_-]` (64 chars max),
 which is also what stops a path from arriving in one.
+
+`import_model` takes one absolute `path` — from the native open panel or a file
+dropped on the window — and copies that file into the model folder, returning the
+`LocalModel` it produced. It is validation before bytes: the path is
+canonicalised, a folder or a missing file is refused, the extension must be
+`.gguf`, and the header must parse. The copy is staged under the same
+`.gguf.part` name a download uses, then its size is compared and its header
+re-read before the rename, so a truncated file cannot enter the library. Nothing
+is moved or overwritten: a name already held by a *different* file becomes
+`name-2.gguf`, and a file that already lives in the model folder is listed
+without a second copy.
 
 `get_server_status` returns `running`, `host`, `port`, `baseUrl`, `engine`,
 `loadedModel`, `servedModels`, `requests`, `uptimeSeconds` and `simulated`.

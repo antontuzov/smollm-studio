@@ -11,6 +11,7 @@ import { ModelsPage } from "@/pages/models";
 import { ServerPage } from "@/pages/server";
 import { SettingsPage } from "@/pages/settings";
 import { EventBridge } from "@/components/event-bridge";
+import { DropZone } from "@/components/drop-zone";
 import { Sidebar } from "@/components/sidebar";
 import { TopBar } from "@/components/top-bar";
 import { Toaster } from "@/components/ui/toaster";
@@ -58,6 +59,7 @@ export function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <EventBridge />
+      <DropZone />
       <div className="flex h-full overflow-hidden">
         <Sidebar />
         <div className="flex min-w-0 flex-1 flex-col">

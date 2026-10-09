@@ -1,6 +1,7 @@
 import { useState } from "react";
 import {
   Download,
+  FilePlus2,
   FolderOpen,
   HardDrive,
   MessageSquare,
@@ -11,8 +12,10 @@ import {
 
 import { deleteLocalModel, loadModel, openFolder, unloadModel } from "@/lib/actions";
 import { formatBytes, formatDateTime, describeError } from "@/lib/format";
+import { importModelFiles, pickModelFiles } from "@/lib/imports";
 import { useLocalModels } from "@/lib/queries";
 import { useEngine } from "@/stores/engine";
+import { useImports } from "@/stores/imports";
 import { useUi } from "@/stores/ui";
 import { DownloadList } from "@/components/download-list";
 import { PageHeader } from "@/components/page-header";
@@ -28,6 +31,7 @@ export function LibraryPage() {
   const [pendingDelete, setPendingDelete] = useState<LocalModel | null>(null);
   const [removing, setRemoving] = useState(false);
   const library = useLocalModels();
+  const copying = useImports((state) => state.copying);
   const handle = useEngine((state) => state.handle);
   const metrics = useEngine((state) => state.metrics);
   const busy = useEngine((state) => state.busy);
@@ -35,6 +39,12 @@ export function LibraryPage() {
 
   const models = library.data ?? [];
   const totalBytes = models.reduce((sum, model) => sum + model.sizeBytes, 0);
+
+  const importFromDisk = async () => {
+    // The panel is the only place a path can come from besides a drop, and both
+    // end up in the same command so the validation is the same.
+    await importModelFiles(await pickModelFiles());
+  };
 
   const confirmDelete = async () => {
     const target = pendingDelete;
@@ -55,7 +65,7 @@ export function LibraryPage() {
     <>
       <PageHeader
         title="Library"
-        description={`Every .gguf file in the model folder, parsed straight from the file header. ${models.length} file(s) · ${formatBytes(totalBytes)} on disk.`}
+        description={`Every .gguf file in the model folder, parsed straight from the file header. ${models.length} file(s) · ${formatBytes(totalBytes)} on disk. Files from anywhere else on this machine can be imported or dropped onto the window.`}
         icon={HardDrive}
         actions={
           <>
@@ -67,12 +77,25 @@ export function LibraryPage() {
               <RefreshCw />
               Rescan
             </Button>
+            <Button onClick={() => void importFromDisk()} disabled={copying.length > 0}>
+              <FilePlus2 />
+              Import from disk
+            </Button>
           </>
         }
       />
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="space-y-4 p-6 pb-0">
+          {copying.length > 0 ? (
+            <Note tone="info">
+              <p>
+                Copying {copying.join(", ")} into the model folder. A large file takes a
+                moment; the list refreshes as each one lands.
+              </p>
+            </Note>
+          ) : null}
+
           {handle ? (
             <Note tone="info">
               <p>
@@ -105,12 +128,18 @@ export function LibraryPage() {
             <EmptyState
               icon={HardDrive}
               title="No models downloaded yet"
-              description="Pick a model on the Models page and press Download. Files you copy into the model folder by hand are listed here too."
+              description="Pick a model on the Models page and press Download. A .gguf you already have works too: import it, or drop it anywhere on this window — it is copied in, never moved."
               action={
-                <Button onClick={() => setPage("models")}>
-                  <Download />
-                  Browse models
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button onClick={() => setPage("models")}>
+                    <Download />
+                    Browse models
+                  </Button>
+                  <Button variant="outline" onClick={() => void importFromDisk()}>
+                    <FilePlus2 />
+                    Import from disk
+                  </Button>
+                </div>
               }
             />
           ) : (

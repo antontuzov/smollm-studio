@@ -126,6 +126,7 @@ Prefer the terminal?
 smollm doctor                       # what can this machine run?
 smollm models list --sort smallest  # browse the catalog
 smollm models pull qwen2.5-0.5b-instruct-gguf
+smollm models import ~/Downloads/MyModel-Q4_K_M.gguf   # a file you already have
 smollm run qwen2.5-0.5b-instruct-gguf --prompt "Explain GGUF in two sentences"
 smollm serve --port 8123            # OpenAI-compatible API on loopback
 ```
@@ -300,7 +301,8 @@ desktop/
 In order, and none of it promised:
 
 1. Token-by-token context pressure warnings, and KV-cache quantisation.
-2. A GGUF conversion/import helper for local files not in the catalog.
+2. A GGUF conversion helper, for a safetensors you want quantised rather than a
+   file you can already import.
 3. Auto-update via the Tauri updater plugin, replacing today's "a newer release
    exists" notice.
 4. More catalog coverage: multilingual, code-tuned and vision-capable small

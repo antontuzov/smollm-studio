@@ -1110,11 +1110,15 @@ fn percent_of(downloaded: u64, total: u64) -> f64 {
     }
 }
 
-fn gb(bytes: u64) -> f64 {
+pub(crate) fn gb(bytes: u64) -> f64 {
     bytes as f64 / 1_073_741_824.0
 }
 
-fn partial_path_for(final_path: &Path) -> PathBuf {
+/// The name a file is written under while it is still incomplete.
+///
+/// Library scans and the start-up sweep both skip `*.part`, so an interrupted
+/// import or download cannot be mistaken for a model.
+pub(crate) fn partial_path_for(final_path: &Path) -> PathBuf {
     let mut path = PathBuf::from(final_path).into_os_string();
     path.push(".part");
     PathBuf::from(path)

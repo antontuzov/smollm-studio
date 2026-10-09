@@ -103,6 +103,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   print hundreds of lines per generation straight to stderr, past the log file and
   past every filter; they are routed into the app's own subscriber now, so
   `RUST_LOG` decides what is shown and the Logs page keeps the rest.
+- **Import a model you already own.** A `.gguf` that lives outside the model
+  folder used to be unusable — the engine loads from the folder the settings name
+  and the Library lists what is inside it. The Library page now has an **Import
+  from disk** button (a native multi-select open panel, from the
+  `tauri-plugin-dialog` this also added), and a `.gguf` dropped anywhere on the
+  window imports too, behind an overlay that says what will happen — which is why
+  `dragDropEnabled` is on: with it off, a dropped file made the webview navigate
+  away from the app. Both doors call one `import_model` command that canonicalises
+  the path, refuses anything whose header does not parse (wrong extension, a
+  folder, a file whose bytes are not GGUF), checks free space first, and stages
+  the copy under the same `.gguf.part` name a download uses before renaming it
+  into place, so an interrupted import is swept by the existing start-up cleanup
+  rather than joining the library as a broken model. Nothing is moved or
+  overwritten: the source file stays where it was, two *different* files with one
+  name become `name.gguf` and `name-2.gguf`, and a file already inside the folder
+  is listed instead of copied a second time. `smollm models import <path>` is the
+  same code without a window.
 - **Conversations survive quitting the app.** A chat used to live only in memory,
   so closing the window deleted it. Each finished answer is now written to
   `<data dir>/sessions/<id>.json` as one file per conversation — JSON rather than

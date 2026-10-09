@@ -381,6 +381,22 @@ pub fn remove(ctx: &Context, file: &str) -> Result<()> {
     Ok(())
 }
 
+/// Copy a .gguf from wherever it lives into the library.
+pub fn import(ctx: &Context, source: &Path) -> Result<()> {
+    let imported = ctx.library.import(source, &ctx.catalog)?;
+    println!(
+        "Imported {} ({}) as {}",
+        imported
+            .metadata
+            .name
+            .as_deref()
+            .unwrap_or(&imported.file_name),
+        report::human_size(imported.size_bytes),
+        imported.path
+    );
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // chat
 // ---------------------------------------------------------------------------

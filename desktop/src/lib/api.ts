@@ -105,6 +105,7 @@ export const api = {
   retryDownload: (downloadId: string) => call<DownloadTask>("retry_download", { downloadId }),
   downloadSnapshot: () => call<DownloadTask[]>("get_download_snapshot"),
   deleteLocalModel: (fileName: string) => call<string>("delete_local_model", { fileName }),
+  importModel: (path: string) => call<LocalModel>("import_model", { path }),
 
   loadModel: (modelId: string, options?: LoadModelOptions) =>
     call<LoadModelResponse>("load_model", { modelId, options }),

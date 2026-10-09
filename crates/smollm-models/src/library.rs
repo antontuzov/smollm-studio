@@ -8,7 +8,7 @@ use smollm_core::model::{LocalModel, ModelDescriptor, ModelMetadata};
 use smollm_core::paths::AppPaths;
 
 use crate::catalog::ModelCatalog;
-use crate::download::{free_space, sanitize_file_name};
+use crate::download::{free_space, gb, partial_path_for, sanitize_file_name};
 
 /// A directory of `.gguf` files plus catalog knowledge about them.
 #[derive(Debug, Clone)]
@@ -64,6 +64,60 @@ impl ModelLibrary {
     /// One file, fully parsed. Used by the Library detail view.
     pub fn inspect(&self, path: &Path, catalog: &ModelCatalog) -> AppResult<LocalModel> {
         Self::to_local_model(path, catalog)
+    }
+
+    /// Bring a GGUF the user already has into the model folder, and list it.
+    ///
+    /// Copied, never moved: an import the user later regrets should not have cost
+    /// them the only copy they had. The header is parsed from the source before
+    /// anything is written, because the alternative is discovering a wrong
+    /// extension after copying several gigabytes of it. The copy lands on a
+    /// `.part` name and is renamed at the end, exactly like a download, so an
+    /// interrupted import is swept up on the next start instead of appearing in
+    /// the library as a model.
+    ///
+    /// A file that already lives in the model folder is listed without a second
+    /// copy, which is what a dragged-back library file should do.
+    pub fn import(&self, source: &Path, catalog: &ModelCatalog) -> AppResult<LocalModel> {
+        self.paths.ensure()?;
+        let source = checked_gguf(source)?;
+        let size = file_size(&source)?;
+
+        let models_dir = self
+            .paths
+            .models_dir
+            .canonicalize()
+            .unwrap_or_else(|_| self.paths.models_dir.clone());
+        let base = sanitize_file_name(
+            source
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default(),
+        )?;
+        let file_name = numerate(&base, &models_dir, &source)?;
+        let dest = models_dir.join(&file_name);
+        if dest == source {
+            tracing::info!(file = %file_name, "model is already in the library");
+            return Self::to_local_model(&dest, catalog);
+        }
+
+        let free = free_space(&models_dir)?;
+        if size > free {
+            return Err(AppError::InsufficientDiskSpace {
+                required_gb: gb(size),
+                available_gb: gb(free),
+            });
+        }
+
+        let temp = partial_path_for(&dest);
+        write_copy(&source, &temp, size).inspect_err(|_| {
+            // A failed copy must not leave a file the library will one day scan.
+            let _ = std::fs::remove_file(&temp);
+        })?;
+        std::fs::rename(&temp, &dest)?;
+
+        tracing::info!(source = %source.display(), file = %file_name, bytes = size, "imported a local model");
+        Self::to_local_model(&dest, catalog)
     }
 
     /// Resolve a catalog id (or bare filename) to a local file.
@@ -162,6 +216,93 @@ impl ModelLibrary {
             parse_error,
         })
     }
+}
+
+/// A real file whose bytes start with a GGUF header, as a canonical path.
+///
+/// Canonicalising is what makes the "is this already in the library" comparison
+/// below mean something: a dragged path and a scanned path can name one file.
+fn checked_gguf(source: &Path) -> AppResult<PathBuf> {
+    let path = source.canonicalize().map_err(|_| {
+        AppError::ModelNotFound(format!("nothing to import at {}", source.display()))
+    })?;
+    if !path.is_file() {
+        return Err(AppError::InvalidRequest(format!(
+            "{} is a folder, not a model file",
+            path.display()
+        )));
+    }
+    let extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or_default();
+    if !extension.eq_ignore_ascii_case("gguf") {
+        let name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("that file");
+        return Err(AppError::InvalidRequest(format!(
+            "{name} is not a .gguf file"
+        )));
+    }
+    // The cheapest proof there are model bytes behind the extension: a few
+    // kilobytes of header, not the whole file.
+    GgufHeader::read(&path)?;
+    Ok(path)
+}
+
+/// The name to file the copy under: the source's own, unless that belongs to a
+/// different file. Overwriting is not on the table — the library holds models
+/// the user paid download time for, and two quants of one model share a stem
+/// all the time.
+fn numerate(base: &str, models_dir: &Path, source: &Path) -> AppResult<String> {
+    let existing = models_dir.join(base);
+    if !existing.exists() {
+        return Ok(base.to_string());
+    }
+    if std::fs::canonicalize(&existing).is_ok_and(|found| found == source) {
+        // The same file, named by the folder it already lives in.
+        return Ok(base.to_string());
+    }
+
+    // `file_stem` rather than a suffix trim, so an upper-case `.GGUF` is stripped
+    // too and the copy does not end up named `Model.GGUF-2.gguf`.
+    let stem: String = Path::new(base)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or(base)
+        .chars()
+        .take(180)
+        .collect();
+    for attempt in 2..=99u8 {
+        let candidate = format!("{stem}-{attempt}.gguf");
+        if !models_dir.join(&candidate).exists() {
+            return Ok(candidate);
+        }
+    }
+    Err(AppError::InvalidRequest(format!(
+        "the model folder already holds too many files named {base}"
+    )))
+}
+
+/// Copy, then prove the copy is the file the library should open.
+fn write_copy(source: &Path, temp: &Path, size: u64) -> AppResult<()> {
+    std::fs::copy(source, temp)?;
+    let written = file_size(temp)?;
+    if written != size {
+        return Err(AppError::Io(std::io::Error::other(format!(
+            "the copy stopped short: {written} of {size} bytes"
+        ))));
+    }
+    // Read back from the copy rather than trusting the source: this is the file
+    // that will be loaded, and a full disk mid-copy is exactly how a truncated
+    // model gets into a library.
+    GgufHeader::read(temp)?;
+    Ok(())
+}
+
+fn file_size(path: &Path) -> AppResult<u64> {
+    Ok(std::fs::metadata(path)?.len())
 }
 
 /// GGUF wins for anything it declares; the catalog fills the gaps.
@@ -342,6 +483,112 @@ mod tests {
         assert!(library.delete("../keep.gguf").is_err());
         assert!(library.delete("missing.gguf").is_err());
         assert!(outside_file.exists(), "files outside the model dir survive");
+    }
+
+    #[test]
+    fn imports_a_file_the_user_already_has() {
+        let source_dir = temp_dir("import-source");
+        let models_dir = temp_dir("import-dest");
+        let source = source_dir.join("private-1.7b.gguf");
+        std::fs::write(&source, gguf_bytes("Private 1.7B")).expect("write");
+
+        let library = ModelLibrary::new(AppPaths::new(Some(models_dir.clone())));
+        let catalog = ModelCatalog::embedded();
+        let imported = library.import(&source, &catalog).expect("imports");
+
+        assert_eq!(imported.file_name, "private-1.7b.gguf");
+        assert_eq!(imported.metadata.name.as_deref(), Some("Private 1.7B"));
+        assert_eq!(imported.size_bytes, gguf_bytes("Private 1.7B").len() as u64);
+        assert!(source.exists(), "an import copies the file, never moves it");
+        assert!(
+            !models_dir.join("private-1.7b.gguf.part").exists(),
+            "the staging name is renamed away"
+        );
+
+        let names: Vec<String> = library
+            .scan(&catalog)
+            .expect("scans")
+            .iter()
+            .map(|model| model.file_name.clone())
+            .collect();
+        assert_eq!(names, vec!["private-1.7b.gguf".to_string()]);
+    }
+
+    #[test]
+    fn refuses_anything_that_is_not_a_model() {
+        let source_dir = temp_dir("refuse");
+        let models_dir = temp_dir("refuse-dest");
+        let library = ModelLibrary::new(AppPaths::new(Some(models_dir.clone())));
+        let catalog = ModelCatalog::embedded();
+
+        // A header that parses is still not importable under the wrong name.
+        let wrong_extension = source_dir.join("notes.txt");
+        std::fs::write(&wrong_extension, gguf_bytes("Notes")).expect("write");
+        let error = library
+            .import(&wrong_extension, &catalog)
+            .expect_err("extension is checked");
+        assert!(error.to_string().contains("not a .gguf file"));
+
+        let wrong_bytes = source_dir.join("not-a-model.gguf");
+        std::fs::write(&wrong_bytes, b"GGUH this is not a header").expect("write");
+        let error = library
+            .import(&wrong_bytes, &catalog)
+            .expect_err("header is checked");
+        assert!(error.to_string().contains("bad magic"));
+
+        assert!(library
+            .import(&source_dir.join("gone.gguf"), &catalog)
+            .is_err());
+        assert!(library.import(&source_dir, &catalog).is_err());
+
+        let models = library.scan(&catalog).expect("folder stays clean");
+        assert!(models.is_empty(), "a refusal writes nothing");
+    }
+
+    #[test]
+    fn a_name_clash_keeps_both_files() {
+        let source_dir = temp_dir("clash-source");
+        let models_dir = temp_dir("clash-dest");
+        std::fs::write(
+            models_dir.join("same.gguf"),
+            gguf_bytes("Already Installed"),
+        )
+        .expect("write");
+        let incoming = source_dir.join("same.gguf");
+        std::fs::write(&incoming, gguf_bytes("Fresh From Downloads")).expect("write");
+
+        let library = ModelLibrary::new(AppPaths::new(Some(models_dir.clone())));
+        let catalog = ModelCatalog::embedded();
+        let imported = library
+            .import(&incoming, &catalog)
+            .expect("imports as a second copy");
+
+        assert_eq!(imported.file_name, "same-2.gguf");
+        assert_eq!(
+            imported.metadata.name.as_deref(),
+            Some("Fresh From Downloads")
+        );
+        let held = std::fs::read(models_dir.join("same.gguf")).expect("still there");
+        assert_eq!(
+            held,
+            gguf_bytes("Already Installed"),
+            "nothing is overwritten"
+        );
+    }
+
+    #[test]
+    fn a_file_already_in_the_library_is_listed_not_duplicated() {
+        let models_dir = temp_dir("already");
+        let inside = models_dir.join("resident.gguf");
+        std::fs::write(&inside, gguf_bytes("Resident")).expect("write");
+
+        let library = ModelLibrary::new(AppPaths::new(Some(models_dir.clone())));
+        let catalog = ModelCatalog::embedded();
+        let listed = library.import(&inside, &catalog).expect("lists it");
+
+        assert_eq!(listed.file_name, "resident.gguf");
+        assert!(!models_dir.join("resident-2.gguf").exists());
+        assert_eq!(library.scan(&catalog).expect("scans").len(), 1);
     }
 
     #[test]

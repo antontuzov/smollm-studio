@@ -1,9 +1,11 @@
 //! Tauri commands: the complete bridge between the UI and the Rust engine.
 //!
-//! Every command is `async`, so nothing runs on the main thread; filesystem and
-//! sysinfo work is moved onto the blocking pool. Errors are [`AppError`], which
-//! serialises to `{ code, message, detail }` so the frontend can show a friendly
-//! sentence while the Logs page keeps the technical text.
+//! Every command is `async` but for `new_chat_session`, which mints a
+//! conversation identity and does no I/O at all; nothing else runs on the main
+//! thread, and filesystem and sysinfo work is moved onto the blocking pool.
+//! Errors are [`AppError`], which serialises to `{ code, message, detail }` so
+//! the frontend can show a friendly sentence while the Logs page keeps the
+//! technical text.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -383,6 +385,36 @@ pub async fn delete_local_model(
     refresh_advertised(&app, &state);
     tracing::info!(target: "app", file = %file_name, unloaded = was_loaded, "local model deleted");
     Ok(removed)
+}
+
+/// Copy a GGUF the user already has into the model folder and list it.
+///
+/// The path comes from a native open panel or a file dropped on the window, so it
+/// is checked rather than trusted: `ModelLibrary::import` canonicalises it,
+/// refuses anything whose header does not parse, and stages the copy under a
+/// `.part` name. This is the slowest file operation the app can be asked for —
+/// several gigabytes on the local disk — so it owns a blocking-pool slot for the
+/// duration and the UI shows a busy state rather than pretending it was instant.
+#[tauri::command]
+pub async fn import_model(
+    app: AppHandle,
+    state: Shared<'_>,
+    path: String,
+) -> AppResult<LocalModel> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::InvalidRequest(
+            "choose a .gguf file to import".to_string(),
+        ));
+    }
+    let target = PathBuf::from(trimmed.to_string());
+    let owned = Arc::clone(&state);
+    let imported = run_blocking(move || owned.library().import(&target, &owned.catalog)).await??;
+
+    // A file in the model folder is a model the server can advertise.
+    refresh_advertised(&app, &state);
+    tracing::info!(target: "app", file = %imported.file_name, "imported a model from disk");
+    Ok(imported)
 }
 
 fn descriptor_of(state: &Arc<AppState>, model_id: &str) -> AppResult<ModelDescriptor> {

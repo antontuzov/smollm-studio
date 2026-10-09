@@ -92,6 +92,11 @@ enum ModelsCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Copy a .gguf you already have into the local library.
+    Import {
+        #[arg(value_name = "PATH")]
+        path: PathBuf,
+    },
     /// Delete a downloaded file by name.
     Rm {
         #[arg(value_name = "FILE")]
@@ -198,6 +203,7 @@ async fn main() -> Result<()> {
             actions::pull(&ctx, &model, force).await
         }
         Command::Models(ModelsCommand::Local { json }) => actions::list_local(&ctx, json),
+        Command::Models(ModelsCommand::Import { path }) => actions::import(&ctx, &path),
         Command::Models(ModelsCommand::Rm { file }) => actions::remove(&ctx, &file),
         Command::Run(args) => actions::run(&mut ctx, &args).await,
         Command::Serve(args) => actions::serve(&mut ctx, &args).await,

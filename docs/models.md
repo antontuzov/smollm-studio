@@ -65,6 +65,25 @@ card is accurate even for a file the catalog has never heard of. A file whose
 header cannot be parsed is listed with the parse error visible instead of being
 hidden.
 
+You do not have to find that folder yourself. **Library → Import from disk**
+opens a native file panel, and dropping a `.gguf` anywhere on the window does the
+same thing. Either way one `import_model` command runs the copy, and it is
+validation first: the path is canonicalised, a folder or a missing file is
+refused, the extension must be `.gguf`, and the header must parse before a single
+gigabyte is copied. Then free space is checked, the bytes go to a
+`<name>.gguf.part` staging name exactly like a download, and only after the copy
+is the same length and its header re-reads clean is it renamed into place — so an
+interrupted import is swept away on the next launch instead of joining the
+library as a broken model.
+
+An import never costs you a file. The source stays where it is (it is copied, not
+moved), a name already held by a *different* file becomes `name-2.gguf` rather
+than overwriting an installed model, and a file that already lives in the model
+folder is listed without a second copy being made.
+
+Terminal: `smollm models import ~/Downloads/MyModel-Q4_K_M.gguf`, which reaches
+the same `ModelLibrary::import` as the window does.
+
 ## Downloads
 
 A transfer is a small state machine: *queued → running → (retrying)* →
