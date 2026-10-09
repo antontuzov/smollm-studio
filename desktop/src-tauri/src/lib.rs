@@ -93,6 +93,7 @@ pub fn run() {
             commands::get_download_snapshot,
             commands::delete_local_model,
             commands::import_model,
+            commands::verify_local_models,
             commands::load_model,
             commands::unload_model,
             commands::get_engine_metrics,

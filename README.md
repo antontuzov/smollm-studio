@@ -38,6 +38,10 @@ SmolLLM Studio is honest about itself, and so is this README.
   quantisation, context length, tensor count, license) and a memory figure
   measured from that header: the bytes the tensor section really holds, plus a
   KV cache sized by the model's own attention geometry.
+- Integrity checks for files already in the library: header, tensor data bounds,
+  weight bytes per parameter and the size the catalog publishes, per file or for
+  the whole folder. GGUF stores no checksum, so a check says `skipped` rather
+  than pretending to have proved something it could not measure.
 - The whole UI: eight pages, streaming chat, sampling controls, server page
   with copyable client snippets, benchmarks, log viewer, settings.
 - Conversations kept on disk as one JSON file per chat — list, search across
@@ -127,6 +131,7 @@ smollm doctor                       # what can this machine run?
 smollm models list --sort smallest  # browse the catalog
 smollm models pull qwen2.5-0.5b-instruct-gguf
 smollm models import ~/Downloads/MyModel-Q4_K_M.gguf   # a file you already have
+smollm models verify                # is every file in the library still whole?
 smollm run qwen2.5-0.5b-instruct-gguf --prompt "Explain GGUF in two sentences"
 smollm serve --port 8123            # OpenAI-compatible API on loopback
 ```
@@ -293,7 +298,7 @@ crates/
   smollm-cli        the `smollm` binary
 desktop/
   src/              React + TypeScript UI (8 pages)
-  src-tauri/        38 commands, event bridge, tray, bundling
+  src-tauri/        40 commands, event bridge, tray, bundling
 ```
 
 ## Roadmap

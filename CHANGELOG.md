@@ -136,6 +136,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a corrupt file is listed as unreadable instead of hiding the rest, *Reset app
   data* reports how many conversations it cleared and keeps the models, and
   nothing leaves the machine.
+- **Library files can be re-verified.** A model that downloaded cleanly can still
+  go wrong later — a disk that filled mid-copy, a folder moved between volumes, a
+  file something else truncated — and until now the Library had no way to notice:
+  the scan only reads the header, so a short file looked fine until the engine
+  failed to load it. **Verify** on the Library header (or one file's own Verify
+  button) runs `verify_local_models`, which answers five questions per file: the
+  file is readable, its header parses, weight bytes follow the data section and
+  reach at least as far as the deepest offset the header declares, the bytes per
+  parameter land in a range a real quantisation occupies, and — for a catalog file
+  — the size still matches what Hugging Face publishes. Each answer is *passed*,
+  *failed* or *skipped*, and skipped is not a soft pass: it means the file gave no
+  number to compare against. To make the truncation check real, the GGUF reader
+  now also keeps the largest tensor offset a v3 header records
+  (`GgufHeader::min_file_bytes`), which on the bundled 360M model pinpoints the
+  last tensor to within 4 KiB of the file's end. The honest limit is documented
+  rather than hidden: GGUF carries no per-file checksum, so bit rot inside tensor
+  data cannot be seen from outside, and a file that fails is deleted and
+  re-downloaded, not repaired. `smollm models verify [FILE] [--json]` is the same
+  code, and exits non-zero when a file fails.
 
 ### Fixed
 

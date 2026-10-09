@@ -106,6 +106,11 @@ pub struct GgufHeader {
     /// First byte of the tensor data section: the header length rounded up to
     /// `general.alignment`. `None` when the tensor infos could not be read.
     pub data_start: Option<u64>,
+    /// How far into the data section the tensor that sits deepest in the file
+    /// begins, in bytes from `data_start`. GGUF v3 records byte offsets; v2
+    /// counts elements instead, so this is `None` for v2 and for any file whose
+    /// tensor infos could not be read.
+    pub last_tensor_offset: Option<u64>,
     /// Size in bytes of the file or buffer the header came from, 0 when the
     /// caller read through a bare reader that reports no length.
     pub source_bytes: u64,
@@ -176,14 +181,21 @@ impl GgufHeader {
 
         // Tensor infos are best effort: some quantised exports pad before them,
         // and metadata is still worth showing even if we cannot count params.
-        let (total_params, data_start) = if n_tensors == 0 || n_tensors > MAX_TENSORS {
-            (None, None)
-        } else {
-            match read_tensor_infos(reader, tensors_at, n_tensors, version, alignment) {
-                Some((params, start)) => (Some(params), Some(start)),
-                None => (None, None),
-            }
-        };
+        let (total_params, data_start, last_tensor_offset) =
+            if n_tensors == 0 || n_tensors > MAX_TENSORS {
+                (None, None, None)
+            } else {
+                match read_tensor_infos(reader, tensors_at, n_tensors, version, alignment) {
+                    Some((params, start, deepest)) => (
+                        Some(params),
+                        Some(start),
+                        // v2 counts elements, not bytes, so its offsets are
+                        // useless as a byte bound.
+                        (version >= 3).then_some(deepest),
+                    ),
+                    None => (None, None, None),
+                }
+            };
 
         Ok(Self {
             version,
@@ -191,6 +203,7 @@ impl GgufHeader {
             metadata,
             total_params,
             data_start,
+            last_tensor_offset,
             source_bytes: 0,
         })
     }
@@ -205,6 +218,19 @@ impl GgufHeader {
         self.data_start
             .and_then(|start| self.source_bytes.checked_sub(start))
             .filter(|bytes| *bytes > 0)
+    }
+
+    /// The fewest bytes a complete file of this header could have: the data
+    /// section start plus the offset of the tensor that sits deepest in it.
+    ///
+    /// A bound, not the true size — the last tensor's own length would need a
+    /// table of quantisation block sizes. Even so, a file shorter than this has
+    /// clearly lost weight bytes, which is what a truncated download looks like.
+    #[must_use]
+    pub fn min_file_bytes(&self) -> Option<u64> {
+        let start = self.data_start?;
+        let deepest = self.last_tensor_offset?;
+        start.checked_add(deepest)
     }
 
     /// Collapse raw key/values into the app's model metadata view.
@@ -282,7 +308,8 @@ fn align_up(value: u64, alignment: u64) -> u64 {
     value.saturating_add(padding) & !padding
 }
 
-/// Count the parameters and locate the tensor data section.
+/// Count the parameters, locate the tensor data section and find the deepest
+/// tensor offset.
 ///
 /// The GGUF spec writes v3 tensor dimensions as uint32 and v2 ones as uint64,
 /// but real v3 exports have been found using uint64 anyway, so the width the
@@ -295,22 +322,28 @@ fn read_tensor_infos<R: Read + Seek>(
     n_tensors: u64,
     version: u32,
     alignment: u64,
-) -> Option<(u64, u64)> {
+) -> Option<(u64, u64, u64)> {
     for wide_dims in [version < 3, version >= 3] {
         if reader.seek(SeekFrom::Start(start)).is_err() {
             return None;
         }
-        if let Ok(total) = read_tensor_params(reader, n_tensors, wide_dims) {
+        if let Ok((total, deepest)) = read_tensor_params(reader, n_tensors, wide_dims) {
             let end = reader.stream_position().ok()?;
-            return Some((total, align_up(end, alignment)));
+            return Some((total, align_up(end, alignment), deepest));
         }
     }
     None
 }
 
-/// Read one tensor info entry per tensor and sum their element counts.
-fn read_tensor_params<R: Read>(reader: &mut R, n_tensors: u64, wide_dims: bool) -> AppResult<u64> {
+/// Read one tensor info entry per tensor, summing element counts and tracking
+/// the largest data offset any tensor claims.
+fn read_tensor_params<R: Read>(
+    reader: &mut R,
+    n_tensors: u64,
+    wide_dims: bool,
+) -> AppResult<(u64, u64)> {
     let mut total: u64 = 0;
+    let mut deepest: u64 = 0;
     for _ in 0..n_tensors {
         let _name = read_string(reader)?;
         let n_dims = read_u32(reader)?;
@@ -333,10 +366,11 @@ fn read_tensor_params<R: Read>(reader: &mut R, n_tensors: u64, wide_dims: bool) 
             elements = elements.saturating_mul(dim);
         }
         let _dtype = read_u32(reader)?;
-        let _offset = read_u64(reader)?;
+        let offset = read_u64(reader)?;
+        deepest = deepest.max(offset);
         total = total.saturating_add(elements);
     }
-    Ok(total)
+    Ok((total, deepest))
 }
 
 /// Read a metadata value, including its leading type byte.
@@ -593,6 +627,46 @@ mod tests {
             header.data_start.is_some(),
             "weights cannot be measured without the data offset"
         );
+    }
+
+    /// One tensor whose recorded data offset is `offset`, written at the width
+    /// the given GGUF version implies for tensor dimensions.
+    fn header_with_tensor_at(version: u32, offset: u64) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(MAGIC);
+        out.extend_from_slice(&version.to_le_bytes());
+        out.extend_from_slice(&1u64.to_le_bytes()); // n_tensors
+        out.extend_from_slice(&1u64.to_le_bytes()); // n_kv
+        push_kv_string(&mut out, "general.architecture", "llama");
+
+        push_string(&mut out, "output.weight");
+        out.extend_from_slice(&2u32.to_le_bytes()); // n_dims
+        for dim in [100u64, 50] {
+            if version >= 3 {
+                out.extend_from_slice(&(dim as u32).to_le_bytes());
+            } else {
+                out.extend_from_slice(&dim.to_le_bytes());
+            }
+        }
+        out.extend_from_slice(&1u32.to_le_bytes()); // dtype f16
+        out.extend_from_slice(&offset.to_le_bytes());
+        out
+    }
+
+    /// v3 counts tensor offsets in bytes from the data start, which makes the
+    /// deepest one a floor the real file has to clear. v2 counts elements, so
+    /// reading its offsets as bytes would invent a size bound out of thin air.
+    #[test]
+    fn only_v3_offsets_bound_the_file_size() {
+        let header = GgufHeader::parse_bytes(&header_with_tensor_at(3, 4_000)).expect("parses");
+        assert_eq!(header.last_tensor_offset, Some(4_000));
+        let start = header.data_start.expect("tensor info was read");
+        assert_eq!(header.min_file_bytes(), Some(start + 4_000));
+
+        let v2 = GgufHeader::parse_bytes(&header_with_tensor_at(2, 4_000)).expect("parses");
+        assert!(v2.data_start.is_some(), "the v2 tensor info still parses");
+        assert_eq!(v2.last_tensor_offset, None);
+        assert_eq!(v2.min_file_bytes(), None);
     }
 
     #[test]

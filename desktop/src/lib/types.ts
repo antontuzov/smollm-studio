@@ -165,6 +165,26 @@ export interface LocalModel {
   parseError: string | null;
 }
 
+/**
+ * One integrity question about a file already in the library. `skipped` means
+ * the file gave no number to compare against — GGUF carries no checksum, so a
+ * flipped byte inside tensor data is not something any check here can see.
+ */
+export type CheckStatus = "passed" | "failed" | "skipped";
+
+export interface VerificationCheck {
+  label: string;
+  status: CheckStatus;
+  detail: string;
+}
+
+export interface ModelVerification {
+  fileName: string;
+  path: string;
+  ok: boolean;
+  checks: VerificationCheck[];
+}
+
 export type DownloadState =
   | "queued"
   | "running"

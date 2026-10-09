@@ -123,7 +123,7 @@ they are never stale.
 
 ## Tauri commands
 
-39 commands, all `async` but for `new_chat_session` (which mints an identity and
+40 commands, all `async` but for `new_chat_session` (which mints an identity and
 does no I/O); filesystem and `sysinfo` work moves to the blocking
 pool so the main thread never stalls. Arguments are camelCase in JavaScript and
 snake_case in Rust. Every rejection serialises to `{ code, message, detail }`.
@@ -186,6 +186,19 @@ re-read before the rename, so a truncated file cannot enter the library. Nothing
 is moved or overwritten: a name already held by a *different* file becomes
 `name-2.gguf`, and a file that already lives in the model folder is listed
 without a second copy.
+
+`verify_local_models` takes an optional `fileName` and returns one
+`ModelVerification` per file: `fileName`, `path`, `ok`, and `checks` — each a
+`label`, a `status` of `passed` / `failed` / `skipped`, and a `detail` saying what
+was measured. Without a `fileName` every scanned file is checked. The checks are
+the ones a GGUF file can answer for itself: the file is readable, its header
+parses, the tensor data section is present and reaches at least as far as the
+deepest offset the header declares, the weight bytes per parameter land in a range
+any quantisation could produce, and — for a file whose name is in the catalog —
+the size still matches what Hugging Face publishes. `skipped` is a real state, not
+a pass: it means the file gave no number to compare against. GGUF carries no
+per-file checksum, so a flipped byte inside tensor data is invisible here; a file
+that fails is deleted and downloaded again, not repaired.
 
 `get_server_status` returns `running`, `host`, `port`, `baseUrl`, `engine`,
 `loadedModel`, `servedModels`, `requests`, `uptimeSeconds` and `simulated`.

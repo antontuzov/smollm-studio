@@ -97,6 +97,14 @@ enum ModelsCommand {
         #[arg(value_name = "PATH")]
         path: PathBuf,
     },
+    /// Re-check a library file, or every file in the library.
+    Verify {
+        /// Library file name; leave out to check all of them
+        #[arg(value_name = "FILE")]
+        file: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Delete a downloaded file by name.
     Rm {
         #[arg(value_name = "FILE")]
@@ -204,6 +212,9 @@ async fn main() -> Result<()> {
         }
         Command::Models(ModelsCommand::Local { json }) => actions::list_local(&ctx, json),
         Command::Models(ModelsCommand::Import { path }) => actions::import(&ctx, &path),
+        Command::Models(ModelsCommand::Verify { file, json }) => {
+            actions::verify(&ctx, file.as_deref(), json)
+        }
         Command::Models(ModelsCommand::Rm { file }) => actions::remove(&ctx, &file),
         Command::Run(args) => actions::run(&mut ctx, &args).await,
         Command::Serve(args) => actions::serve(&mut ctx, &args).await,

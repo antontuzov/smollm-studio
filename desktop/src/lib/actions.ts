@@ -14,7 +14,13 @@ import { toast } from "@/stores/ui";
 
 import { CommandError } from "./types";
 
-import type { DownloadTask, LoadModelOptions, ServerConfig, ServerStatus } from "./types";
+import type {
+  DownloadTask,
+  LoadModelOptions,
+  ModelVerification,
+  ServerConfig,
+  ServerStatus,
+} from "./types";
 
 /** One toast shape for every failed command helper in `lib/`. */
 export function reportFailure(title: string, error: unknown): void {
@@ -94,6 +100,44 @@ export async function unloadModel(): Promise<void> {
   } catch (error) {
     useEngine.getState().setBusy(false);
     reportFailure("Could not unload the model", error);
+  }
+}
+
+/**
+ * Re-check one library file, or all of them, and toast the honest summary.
+ *
+ * The reports come back to the caller because the Library page keeps them
+ * visible per row: a failed check is something the user acts on, not a message
+ * that disappears.
+ */
+export async function verifyModels(
+  fileName?: string,
+): Promise<ModelVerification[] | null> {
+  try {
+    const reports = await api.verifyModels(fileName);
+    const broken = reports.filter((report) => !report.ok);
+    if (broken.length === 0) {
+      const label =
+        reports.length === 1
+          ? reports[0].fileName
+          : `${reports.length} file(s)`;
+      toast({
+        title: `${label} passed`,
+        description: "Every check the file can be judged on came back clean.",
+        variant: "success",
+      });
+    } else {
+      const names = broken.map((report) => report.fileName).join(", ");
+      toast({
+        title: `${broken.length} of ${reports.length} file(s) failed`,
+        description: `${names}: GGUF carries no checksum, so this checks the header and the sizes. Delete a failing file and download it again.`,
+        variant: "error",
+      });
+    }
+    return reports;
+  } catch (error) {
+    reportFailure("Could not verify the model files", error);
+    return null;
   }
 }
 

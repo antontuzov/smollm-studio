@@ -37,6 +37,7 @@ import type {
   LocalModel,
   LogEntry,
   LogFilter,
+  ModelVerification,
   ResetOutcome,
   SamplingPreset,
   ServerConfig,
@@ -106,6 +107,8 @@ export const api = {
   downloadSnapshot: () => call<DownloadTask[]>("get_download_snapshot"),
   deleteLocalModel: (fileName: string) => call<string>("delete_local_model", { fileName }),
   importModel: (path: string) => call<LocalModel>("import_model", { path }),
+  verifyModels: (fileName?: string) =>
+    call<ModelVerification[]>("verify_local_models", { fileName: fileName ?? null }),
 
   loadModel: (modelId: string, options?: LoadModelOptions) =>
     call<LoadModelResponse>("load_model", { modelId, options }),

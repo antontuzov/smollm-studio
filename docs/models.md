@@ -84,6 +84,34 @@ folder is listed without a second copy being made.
 Terminal: `smollm models import ~/Downloads/MyModel-Q4_K_M.gguf`, which reaches
 the same `ModelLibrary::import` as the window does.
 
+## Verifying a file that is already in the library
+
+A download can finish clean and still go wrong later: a disk that filled mid-copy,
+a folder moved between volumes, a file edited by something else. **Library →
+Verify** (or one file's **Verify** button) asks each file the questions its own
+bytes can answer:
+
+| Check | What it proves |
+| --- | --- |
+| File on disk | the file is there, and holds more than zero bytes |
+| GGUF header | the magic, version and metadata still parse |
+| Tensor data | weight bytes follow the data section start, and the file reaches at least as far as the deepest offset the header declares |
+| Bytes per parameter | the weight size per parameter lands inside the range a real quantisation occupies |
+| Catalog size | for a catalog file, the size still matches what Hugging Face publishes |
+
+Each answer is `passed`, `failed` or `skipped`. Skipped is not a soft pass — it
+means the file gave no number to compare against, which happens for a header
+without a parameter count or a file the catalog does not know.
+
+What no check can do is prove every weight byte survived. **GGUF stores no
+per-file checksum**, so bit rot inside the tensor data is invisible from the
+outside; that is also why the answer to a failed check is *delete the file and
+download it again* rather than *repair it*.
+
+Terminal: `smollm models verify` for the whole folder, `smollm models verify
+SmolLM2-360M-Instruct-Q4_K_M.gguf` for one file, `--json` for scripts. The command
+exits non-zero when a file fails, so it is usable from a shell.
+
 ## Downloads
 
 A transfer is a small state machine: *queued → running → (retrying)* →

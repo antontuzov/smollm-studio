@@ -15,7 +15,7 @@ use smollm_core::chat::{
 };
 use smollm_core::config::Settings;
 use smollm_core::model::{
-    estimate_ram_gb, CatalogStatus, LocalModel, ModelDescriptor, ModelMetadata,
+    estimate_ram_gb, CatalogStatus, CheckStatus, LocalModel, ModelDescriptor, ModelMetadata,
 };
 use smollm_core::system::{HardwareReport, ServerConfig};
 use smollm_core::AppPaths;
@@ -395,6 +395,56 @@ pub fn import(ctx: &Context, source: &Path) -> Result<()> {
         imported.path
     );
     Ok(())
+}
+
+/// Re-check library files against what their own headers claim about them.
+pub fn verify(ctx: &Context, file: Option<&str>, json: bool) -> Result<()> {
+    let reports = match file {
+        Some(name) => vec![ctx.library.verify(name, &ctx.catalog)?],
+        None => ctx.library.verify_all(&ctx.catalog)?,
+    };
+    if json {
+        return print_json(&reports);
+    }
+
+    for report in &reports {
+        println!(
+            "{} {} ({})",
+            if report.ok { "ok  " } else { "FAIL" },
+            report.file_name,
+            report.path
+        );
+        for check in &report.checks {
+            println!(
+                "  {:<8} {:<19} {}",
+                status_word(check.status),
+                check.label,
+                check.detail
+            );
+        }
+    }
+
+    let failing = reports.iter().filter(|report| !report.ok).count();
+    if failing > 0 {
+        bail!(
+            "{failing} of {} file(s) failed verification; delete them and download again",
+            reports.len()
+        );
+    }
+    println!(
+        "\n{} file(s) verified from {}",
+        reports.len(),
+        ctx.paths.models_dir.display()
+    );
+    Ok(())
+}
+
+fn status_word(status: CheckStatus) -> &'static str {
+    match status {
+        CheckStatus::Passed => "passed",
+        CheckStatus::Failed => "FAILED",
+        CheckStatus::Skipped => "skipped",
+    }
 }
 
 // ---------------------------------------------------------------------------

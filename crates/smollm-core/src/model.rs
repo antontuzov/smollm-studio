@@ -324,6 +324,83 @@ impl LocalModel {
     }
 }
 
+/// Outcome of one integrity question asked of a local file.
+///
+/// `skipped` is a state of its own because GGUF carries no per-file checksum and
+/// a header does not always declare its tensor list. Marking something we could
+/// not measure as passed would tell the user their model is fine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckStatus {
+    Passed,
+    Failed,
+    Skipped,
+}
+
+/// A single check, named the way it reads in the UI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VerificationCheck {
+    pub label: String,
+    pub status: CheckStatus,
+    /// What was measured, in units the user can act on.
+    pub detail: String,
+}
+
+impl VerificationCheck {
+    pub fn passed(label: &str, detail: impl Into<String>) -> Self {
+        Self::with(label, CheckStatus::Passed, detail)
+    }
+
+    pub fn failed(label: &str, detail: impl Into<String>) -> Self {
+        Self::with(label, CheckStatus::Failed, detail)
+    }
+
+    pub fn skipped(label: &str, detail: impl Into<String>) -> Self {
+        Self::with(label, CheckStatus::Skipped, detail)
+    }
+
+    fn with(label: &str, status: CheckStatus, detail: impl Into<String>) -> Self {
+        Self {
+            label: label.to_string(),
+            status,
+            detail: detail.into(),
+        }
+    }
+
+    pub fn is_failed(&self) -> bool {
+        self.status == CheckStatus::Failed
+    }
+}
+
+/// The integrity report for one file in the model directory.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelVerification {
+    pub file_name: String,
+    pub path: String,
+    /// No check failed. Skipped checks do not make a model broken.
+    pub ok: bool,
+    pub checks: Vec<VerificationCheck>,
+}
+
+impl ModelVerification {
+    pub fn new(file_name: String, path: String, checks: Vec<VerificationCheck>) -> Self {
+        let ok = !checks.iter().any(|check| check.is_failed());
+        Self {
+            file_name,
+            path,
+            ok,
+            checks,
+        }
+    }
+
+    /// Checks that came back broken, which is what the UI counts.
+    pub fn failures(&self) -> usize {
+        self.checks.iter().filter(|check| check.is_failed()).count()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

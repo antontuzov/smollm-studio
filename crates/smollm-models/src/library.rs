@@ -1,14 +1,22 @@
-//! Local model library: scan, inspect and delete downloaded GGUF files.
+//! Local model library: scan, import, verify and delete downloaded GGUF files.
 
 use std::path::{Path, PathBuf};
 
 use smollm_core::error::{AppError, AppResult};
 use smollm_core::gguf::GgufHeader;
-use smollm_core::model::{LocalModel, ModelDescriptor, ModelMetadata};
+use smollm_core::model::{
+    LocalModel, ModelDescriptor, ModelMetadata, ModelVerification, VerificationCheck,
+};
 use smollm_core::paths::AppPaths;
 
 use crate::catalog::ModelCatalog;
-use crate::download::{free_space, gb, partial_path_for, sanitize_file_name};
+use crate::download::{free_space, gb, partial_path_for, sanitize_file_name, size_matches};
+
+/// Weight bytes per parameter that any real quantisation could produce. Below
+/// Q2_0 there are fewer bytes than a compressed tensor holds; above a relaxed
+/// f32 the parameter count or the data section is nonsense.
+const MIN_BYTES_PER_PARAM: f64 = 0.3;
+const MAX_BYTES_PER_PARAM: f64 = 8.0;
 
 /// A directory of `.gguf` files plus catalog knowledge about them.
 #[derive(Debug, Clone)]
@@ -139,6 +147,26 @@ impl ModelLibrary {
         Err(AppError::ModelNotFound(model_id.to_string()))
     }
 
+    /// Re-check one library file: is it whole, is it a model, is it the size the
+    /// catalog published? See [`verify_path`] for what a header can and cannot
+    /// prove.
+    pub fn verify(&self, file_name: &str, catalog: &ModelCatalog) -> AppResult<ModelVerification> {
+        let path = self.library_file(file_name)?;
+        Ok(verify_path(&path, catalog))
+    }
+
+    /// Re-check everything the scan lists, in list order.
+    ///
+    /// Built on the scan rather than on filenames, so a file in a subfolder of
+    /// the model directory is verified at the path it was found at.
+    pub fn verify_all(&self, catalog: &ModelCatalog) -> AppResult<Vec<ModelVerification>> {
+        let models = self.scan(catalog)?;
+        Ok(models
+            .iter()
+            .map(|model| verify_path(Path::new(&model.path), catalog))
+            .collect())
+    }
+
     pub fn exists(&self, model: &ModelDescriptor) -> bool {
         self.paths.models_dir.join(&model.filename).exists()
     }
@@ -149,6 +177,14 @@ impl ModelLibrary {
 
     /// Delete a local file. Only files inside the model directory can be removed.
     pub fn delete(&self, file_name: &str) -> AppResult<PathBuf> {
+        let path = self.library_file(file_name)?;
+        std::fs::remove_file(&path)?;
+        tracing::info!(path = %path.display(), "deleted local model");
+        Ok(path)
+    }
+
+    /// A file inside the model directory, resolved and guarded against traversal.
+    fn library_file(&self, file_name: &str) -> AppResult<PathBuf> {
         let sanitized = sanitize_file_name(file_name)?;
         let path = self.paths.models_dir.join(&sanitized);
         let canonical = path
@@ -161,7 +197,7 @@ impl ModelLibrary {
             .unwrap_or_else(|_| self.paths.models_dir.clone());
         if !canonical.starts_with(&root) {
             return Err(AppError::InvalidRequest(format!(
-                "refusing to delete outside the model directory: {}",
+                "refusing to touch a file outside the model directory: {}",
                 canonical.display()
             )));
         }
@@ -170,8 +206,6 @@ impl ModelLibrary {
                 "model path is a directory, not a file".into(),
             ));
         }
-        std::fs::remove_file(&canonical)?;
-        tracing::info!(path = %canonical.display(), "deleted local model");
         Ok(canonical)
     }
 
@@ -216,6 +250,194 @@ impl ModelLibrary {
             parse_error,
         })
     }
+}
+
+/// Ask one file the questions it can answer for itself, and report each answer
+/// as pass, fail or skipped.
+///
+/// This is deliberately header-and-size only. GGUF stores no per-file checksum,
+/// so a flipped byte inside tensor data cannot be seen here; what this does catch
+/// is a file that is gone, empty, not a model, truncated, or a different size
+/// than the catalog published. A file that fails any of those should be
+/// re-downloaded rather than repaired.
+fn verify_path(path: &Path, catalog: &ModelCatalog) -> ModelVerification {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_string();
+    let mut checks = Vec::new();
+
+    let size = match std::fs::metadata(path) {
+        Ok(stat) if stat.len() == 0 => {
+            checks.push(VerificationCheck::failed(
+                "File on disk",
+                "the file is there but holds no bytes at all",
+            ));
+            None
+        }
+        Ok(stat) => {
+            checks.push(VerificationCheck::passed(
+                "File on disk",
+                format!("{} bytes, readable", stat.len()),
+            ));
+            Some(stat.len())
+        }
+        Err(error) => {
+            checks.push(VerificationCheck::failed(
+                "File on disk",
+                format!("it cannot be read: {error}"),
+            ));
+            None
+        }
+    };
+
+    let header = match GgufHeader::read(path) {
+        Ok(header) => {
+            checks.push(VerificationCheck::passed(
+                "GGUF header",
+                format!(
+                    "version {}, {} tensor(s), {} metadata key(s)",
+                    header.version,
+                    header.n_tensors,
+                    header.metadata.len()
+                ),
+            ));
+            Some(header)
+        }
+        Err(error) => {
+            checks.push(VerificationCheck::failed("GGUF header", error.to_string()));
+            None
+        }
+    };
+
+    if let Some(header) = header.as_ref() {
+        checks.push(verify_tensors(header));
+        checks.push(verify_bytes_per_parameter(header));
+    } else {
+        checks.push(VerificationCheck::skipped(
+            "Tensor data",
+            "the header did not parse, so nothing inside the file can be located",
+        ));
+        checks.push(VerificationCheck::skipped(
+            "Bytes per parameter",
+            "the header did not parse",
+        ));
+    }
+
+    checks.push(verify_against_catalog(catalog, &file_name, size));
+
+    ModelVerification::new(file_name, path.display().to_string(), checks)
+}
+
+/// Are the weight bytes the header says exist actually present?
+fn verify_tensors(header: &GgufHeader) -> VerificationCheck {
+    let label = "Tensor data";
+    if header.n_tensors == 0 {
+        return VerificationCheck::skipped(
+            label,
+            "the file declares no tensors, so there is no data section to place",
+        );
+    }
+    let Some(start) = header.data_start else {
+        return VerificationCheck::skipped(
+            label,
+            "the tensor list could not be read, so the data section cannot be located",
+        );
+    };
+    let data_bytes = header.source_bytes.saturating_sub(start);
+    if data_bytes == 0 {
+        return VerificationCheck::failed(
+            label,
+            format!(
+                "weights should begin at byte {start} but the file ends at {} — the file is truncated",
+                header.source_bytes
+            ),
+        );
+    }
+    match header.min_file_bytes() {
+        Some(required) if header.source_bytes < required => VerificationCheck::failed(
+            label,
+            format!(
+                "the deepest tensor starts at byte {required} but the file is only {} bytes",
+                header.source_bytes
+            ),
+        ),
+        Some(required) => VerificationCheck::passed(
+            label,
+            format!("{data_bytes} weight bytes from byte {start}, including the tensor that begins at byte {required}"),
+        ),
+        None => VerificationCheck::passed(label, format!("{data_bytes} bytes of weights")),
+    }
+}
+
+/// Does the weight section hold a plausible number of bytes per parameter?
+fn verify_bytes_per_parameter(header: &GgufHeader) -> VerificationCheck {
+    let label = "Bytes per parameter";
+    let params = header.total_params.filter(|count| *count > 0);
+    match (header.weight_bytes(), params) {
+        (Some(weights), Some(count)) => {
+            let per_param = weights as f64 / count as f64;
+            let measured = format!("{per_param:.2} bytes for each of {count} parameters");
+            if (MIN_BYTES_PER_PARAM..=MAX_BYTES_PER_PARAM).contains(&per_param) {
+                VerificationCheck::passed(label, measured)
+            } else {
+                VerificationCheck::failed(
+                    label,
+                    format!(
+                        "{measured} — outside the {:.1}–{:.1} range any quantisation reaches",
+                        MIN_BYTES_PER_PARAM, MAX_BYTES_PER_PARAM
+                    ),
+                )
+            }
+        }
+        (Some(_), None) => VerificationCheck::skipped(
+            label,
+            "the header does not count its parameters, so plausibility cannot be judged",
+        ),
+        (None, _) => VerificationCheck::skipped(label, "the weight section could not be measured"),
+    }
+}
+
+/// Does a catalog file still weigh what Hugging Face publishes for it?
+fn verify_against_catalog(
+    catalog: &ModelCatalog,
+    file_name: &str,
+    size: Option<u64>,
+) -> VerificationCheck {
+    let label = "Catalog size";
+    let Some(model) = catalog.find_by_filename(file_name) else {
+        return VerificationCheck::skipped(
+            label,
+            "this file is not in the catalog, so there is no published size to compare",
+        );
+    };
+    let Some(actual) = size else {
+        return VerificationCheck::skipped(label, "the file could not be sized");
+    };
+    if model.size_mb == 0 {
+        return VerificationCheck::skipped(
+            label,
+            format!("the catalog entry for {} records no size", model.id),
+        );
+    }
+    let expected = model.size_mb.saturating_mul(1_000_000);
+    if size_matches(actual, model.size_mb) {
+        return VerificationCheck::passed(
+            label,
+            format!(
+                "{actual} bytes against the catalog's {expected} for {}",
+                model.id
+            ),
+        );
+    }
+    VerificationCheck::failed(
+        label,
+        format!(
+            "{actual} bytes on disk, {expected} published for {} — download it again",
+            model.id
+        ),
+    )
 }
 
 /// A real file whose bytes start with a GGUF header, as a canonical path.
@@ -349,6 +571,8 @@ fn metadata_from_catalog(catalog: Option<&ModelDescriptor>, file_name: &str) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use smollm_core::model::CheckStatus;
 
     /// Minimal v3 header: one `general.name` string and no tensors.
     fn gguf_bytes(name: &str) -> Vec<u8> {
@@ -603,5 +827,199 @@ mod tests {
             gguf_bytes("One").len() as u64
         );
         assert!(library.free_space_bytes().expect("measured") > 0);
+    }
+
+    /// v3 header with one tensor of `dims` starting at byte `offset` inside the
+    /// data section, then `weight_bytes` of weight data after the aligned start.
+    fn model_bytes(dims: &[u32], offset: u64, weight_bytes: usize) -> Vec<u8> {
+        let mut out = gguf_bytes("Verify Fixture");
+        // Rewrite the counts: one tensor, and the one metadata key already there.
+        out[8..16].copy_from_slice(&1u64.to_le_bytes());
+        let tensor = "blk.0.weight";
+        out.extend_from_slice(&(tensor.len() as u64).to_le_bytes());
+        out.extend_from_slice(tensor.as_bytes());
+        out.extend_from_slice(&(dims.len() as u32).to_le_bytes());
+        for dim in dims {
+            out.extend_from_slice(&dim.to_le_bytes());
+        }
+        out.extend_from_slice(&1u32.to_le_bytes()); // dtype
+        out.extend_from_slice(&offset.to_le_bytes());
+        while out.len() as u64 % 32 != 0 {
+            out.push(0);
+        }
+        out.resize(out.len() + weight_bytes, 7);
+        out
+    }
+
+    fn verification_labels(report: &ModelVerification) -> Vec<&str> {
+        report
+            .checks
+            .iter()
+            .map(|check| check.label.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn a_whole_model_passes_what_can_be_judged() {
+        let models_dir = temp_dir("verify-ok");
+        std::fs::write(
+            models_dir.join("whole.gguf"),
+            model_bytes(&[1_000], 0, 1_000),
+        )
+        .expect("write");
+
+        let library = ModelLibrary::new(AppPaths::new(Some(models_dir)));
+        let catalog = ModelCatalog::embedded();
+        let report = library.verify("whole.gguf", &catalog).expect("verifies");
+
+        assert_eq!(report.file_name, "whole.gguf");
+        assert!(report.ok, "{:?}", report.checks);
+        assert_eq!(report.failures(), 0);
+        assert_eq!(
+            verification_labels(&report),
+            vec![
+                "File on disk",
+                "GGUF header",
+                "Tensor data",
+                "Bytes per parameter",
+                "Catalog size"
+            ]
+        );
+        // A private file has no published size to be wrong about, which is
+        // reported as skipped rather than as a pass.
+        assert_eq!(report.checks[4].status, CheckStatus::Skipped);
+    }
+
+    #[test]
+    fn a_truncated_download_fails_the_tensor_check() {
+        let models_dir = temp_dir("verify-truncated");
+        // The header claims a tensor begins 5_000 bytes into the data section,
+        // but only 1_000 weight bytes were ever written.
+        std::fs::write(
+            models_dir.join("short.gguf"),
+            model_bytes(&[1_000], 5_000, 1_000),
+        )
+        .expect("write");
+
+        let library = ModelLibrary::new(AppPaths::new(Some(models_dir)));
+        let report = library
+            .verify("short.gguf", &ModelCatalog::embedded())
+            .expect("verifies");
+
+        assert!(!report.ok);
+        assert_eq!(report.failures(), 1);
+        let failed = report
+            .checks
+            .iter()
+            .find(|check| check.is_failed())
+            .expect("one failing check");
+        assert_eq!(failed.label, "Tensor data");
+        assert!(failed.detail.contains("the file is only"));
+    }
+
+    #[test]
+    fn a_file_without_any_weight_bytes_is_called_out() {
+        let models_dir = temp_dir("verify-header-only");
+        std::fs::write(models_dir.join("stub.gguf"), model_bytes(&[1_000], 0, 0)).expect("write");
+
+        let library = ModelLibrary::new(AppPaths::new(Some(models_dir)));
+        let report = library
+            .verify("stub.gguf", &ModelCatalog::embedded())
+            .expect("verifies");
+
+        assert!(!report.ok);
+        let tensor = report
+            .checks
+            .iter()
+            .find(|check| check.label == "Tensor data")
+            .expect("the check is always reported");
+        assert!(tensor.detail.contains("truncated"));
+        // Nothing can be said about bytes per parameter without weights.
+        assert_eq!(report.checks[3].status, CheckStatus::Skipped);
+    }
+
+    #[test]
+    fn a_file_that_is_not_gguf_says_no_more_than_is_known() {
+        let models_dir = temp_dir("verify-junk");
+        std::fs::write(models_dir.join("junk.gguf"), b"GGUZ not a model file").expect("write");
+
+        let library = ModelLibrary::new(AppPaths::new(Some(models_dir)));
+        let report = library
+            .verify("junk.gguf", &ModelCatalog::embedded())
+            .expect("verifies");
+
+        assert!(!report.ok);
+        assert_eq!(report.checks[1].status, CheckStatus::Failed);
+        assert_eq!(report.checks[2].status, CheckStatus::Skipped);
+        assert_eq!(report.checks[3].status, CheckStatus::Skipped);
+    }
+
+    #[test]
+    fn a_catalog_file_that_changed_size_fails_against_the_catalog() {
+        let catalog = ModelCatalog::embedded();
+        let known = catalog
+            .models()
+            .iter()
+            .find(|model| model.size_mb > 0)
+            .expect("a catalog entry with a size");
+
+        let models_dir = temp_dir("verify-catalog");
+        // Whole by its own numbers, a tenth the size Hugging Face publishes.
+        std::fs::write(
+            models_dir.join(&known.filename),
+            model_bytes(&[1_000], 0, 1_000),
+        )
+        .expect("write");
+
+        let library = ModelLibrary::new(AppPaths::new(Some(models_dir)));
+        let report = library.verify(&known.filename, &catalog).expect("verifies");
+
+        assert!(!report.ok);
+        let size = report
+            .checks
+            .iter()
+            .find(|check| check.label == "Catalog size")
+            .expect("the check is always reported");
+        assert_eq!(size.status, CheckStatus::Failed);
+        assert!(size.detail.contains("download it again"));
+    }
+
+    #[test]
+    fn verify_only_answers_for_files_in_the_library() {
+        let models_dir = temp_dir("verify-scope");
+        std::fs::write(
+            models_dir.join("inside.gguf"),
+            model_bytes(&[1_000], 0, 1_000),
+        )
+        .expect("write");
+        let library = ModelLibrary::new(AppPaths::new(Some(models_dir)));
+        let catalog = ModelCatalog::embedded();
+
+        assert!(library.verify("missing.gguf", &catalog).is_err());
+        assert!(library.verify("../inside.gguf", &catalog).is_err());
+    }
+
+    #[test]
+    fn verify_all_reports_every_scanned_file() {
+        let models_dir = temp_dir("verify-all");
+        std::fs::write(
+            models_dir.join("whole.gguf"),
+            model_bytes(&[1_000], 0, 1_000),
+        )
+        .expect("write");
+        std::fs::write(models_dir.join("broken.gguf"), b"not a model").expect("write");
+        std::fs::write(models_dir.join("half.gguf.part"), b"ignore me").expect("write");
+
+        let library = ModelLibrary::new(AppPaths::new(Some(models_dir)));
+        let catalog = ModelCatalog::embedded();
+        let reports = library.verify_all(&catalog).expect("verifies");
+
+        assert_eq!(reports.len(), 2, "a .part file is not a model to verify");
+        assert!(reports.iter().any(|report| report.ok));
+        let broken = reports
+            .iter()
+            .find(|report| report.file_name == "broken.gguf")
+            .expect("the broken file is reported, not dropped");
+        assert!(!broken.ok);
     }
 }

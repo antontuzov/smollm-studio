@@ -19,7 +19,7 @@ use smollm_core::chat::{
 };
 use smollm_core::config::Settings;
 use smollm_core::model::{
-    estimate_ram_gb, CatalogStatus, LocalModel, ModelDescriptor, ModelMetadata,
+    estimate_ram_gb, CatalogStatus, LocalModel, ModelDescriptor, ModelMetadata, ModelVerification,
 };
 use smollm_core::session::{ChatSession, ExportFormat, SessionHit, SessionIndex, SessionStore};
 use smollm_core::system::{
@@ -385,6 +385,37 @@ pub async fn delete_local_model(
     refresh_advertised(&app, &state);
     tracing::info!(target: "app", file = %file_name, unloaded = was_loaded, "local model deleted");
     Ok(removed)
+}
+
+/// Re-check one library file, or every file in it.
+///
+/// Reading the headers is bounded work — a few kilobytes per file, not the whole
+/// model — so this is safe to run on the blocking pool while a download is
+/// moving. What it reports is what a GGUF can prove about itself; see
+/// `ModelLibrary::verify` for the limits.
+#[tauri::command]
+pub async fn verify_local_models(
+    state: Shared<'_>,
+    file_name: Option<String>,
+) -> AppResult<Vec<ModelVerification>> {
+    let owned = Arc::clone(&state);
+    let reports = run_blocking(move || match file_name.as_deref() {
+        Some(name) => owned
+            .library()
+            .verify(name, &owned.catalog)
+            .map(|one| vec![one]),
+        None => owned.library().verify_all(&owned.catalog),
+    })
+    .await??;
+
+    let broken = reports.iter().filter(|report| !report.ok).count();
+    tracing::info!(
+        target: "app",
+        files = reports.len(),
+        failing = broken,
+        "verified local model files"
+    );
+    Ok(reports)
 }
 
 /// Copy a GGUF the user already has into the model folder and list it.
