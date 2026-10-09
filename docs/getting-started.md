@@ -60,6 +60,10 @@ you the largest model band that fits. Nothing else needs configuring.
    starting* to the engine name, and the loaded model's name appears next to it.
 3. **Chat** → type. Enter sends, Shift+Enter is a newline, **Stop** abandons the
    current generation mid-stream.
+4. Every finished answer is written to `<root>/sessions` as its own file. The
+   **Conversations** panel on the right reopens, renames, searches, exports
+   (Markdown or JSON) and deletes them, and the app reopens your last
+   conversation when you start it again.
 
 ## Where things live
 
@@ -68,6 +72,7 @@ you the largest model band that fits. Nothing else needs configuring.
 | Data root | `~/Library/Application Support/SmolLLM Studio` | `%APPDATA%\SmolLLM Studio` | `~/.local/share/smollm-studio` |
 | Models | `<root>/models` | same | same |
 | Logs | `<root>/logs` | same | same |
+| Conversations | `<root>/sessions` | same | same |
 | Settings | `<root>/settings.json` | same | same |
 
 `SMOLLM_STUDIO_DATA_DIR` moves the whole root, which is how you run a portable

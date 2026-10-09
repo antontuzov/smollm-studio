@@ -61,6 +61,9 @@ pub fn run() {
     };
 
     Builder::default()
+        // Native open/save panels: a transcript export and a model import both
+        // need a real filesystem path, which the webview will not hand out.
+        .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
             let handle = app.handle().clone();
             let (bootstrapped, receiver) = AppState::bootstrap(settings, logs)?;
@@ -94,6 +97,14 @@ pub fn run() {
             commands::get_engine_metrics,
             commands::start_chat_stream,
             commands::stop_generation,
+            commands::new_chat_session,
+            commands::save_chat_session,
+            commands::list_chat_sessions,
+            commands::search_chat_sessions,
+            commands::get_chat_session,
+            commands::rename_chat_session,
+            commands::delete_chat_session,
+            commands::export_chat_session,
             commands::start_server,
             commands::stop_server,
             commands::get_server_status,

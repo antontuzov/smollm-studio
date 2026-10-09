@@ -20,6 +20,7 @@ export const queryKeys = {
   localModels: ["local-models"] as const,
   downloads: ["downloads"] as const,
   engineMetrics: ["engine-metrics"] as const,
+  sessions: ["chat-sessions"] as const,
   serverStatus: ["server-status"] as const,
   serverExamples: (modelId: string) => ["server-examples", modelId] as const,
   logs: ["logs"] as const,
@@ -103,6 +104,22 @@ export function useSettingsQuery() {
 
 export function usePresets() {
   return useQuery({ queryKey: queryKeys.presets, queryFn: api.getPresets, staleTime: Infinity });
+}
+
+/** Saved conversations, newest edit first. */
+export function useSessions() {
+  return useQuery({ queryKey: queryKeys.sessions, queryFn: api.listChatSessions });
+}
+
+/** Full-text matches over those conversations. */
+export function useSessionSearch(query: string) {
+  const trimmed = query.trim();
+  return useQuery({
+    // Under the sessions key, so one invalidation refreshes both views.
+    queryKey: [...queryKeys.sessions, "search", trimmed],
+    queryFn: () => api.searchChatSessions(trimmed),
+    enabled: trimmed.length > 0,
+  });
 }
 
 /** The subset of catalog entries for a list of ids, resolved client-side. */

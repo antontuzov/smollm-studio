@@ -40,6 +40,9 @@ SmolLLM Studio is honest about itself, and so is this README.
   KV cache sized by the model's own attention geometry.
 - The whole UI: eight pages, streaming chat, sampling controls, server page
   with copyable client snippets, benchmarks, log viewer, settings.
+- Conversations kept on disk as one JSON file per chat — list, search across
+  titles and answers, rename, export to Markdown or JSON, reopen on launch. An
+  answer is written when it finishes, so quitting never loses one.
 - An OpenAI-compatible HTTP server (`/health`, `/v1/models`, `/v1/models/{id}`,
   `/v1/chat/completions`, `/v1/completions`, `/v1/engine/metrics`) with
   `stream: true` over SSE and `stream_options.include_usage`.
@@ -108,6 +111,9 @@ library is a contained change:
 3. On the **Models** page, press **Download** on something small — Qwen2.5 0.5B
    or SmolLM2 360M are good first runs.
 4. Press **Load**, then **Chat**.
+5. Come back later: the app reopens your last conversation, and the
+   **Conversations** panel lists every chat that has an answer in it — click to
+   reopen, search across titles and text, rename, or export as Markdown or JSON.
 
 The first load is a cold read from disk, so it is slower than the numbers you
 see afterwards. If the app was installed from a plain release build, that
@@ -277,7 +283,7 @@ port and model filled in. Full reference:
 
 ```
 crates/
-  smollm-core       domain types, errors, config, paths, GGUF metadata
+  smollm-core       domain types, errors, config, paths, GGUF metadata, sessions
   smollm-engine     InferenceEngine trait, llama.cpp and Mock engines, GGUF
                     reader, benchmark, device probe
   smollm-models     catalog, Hugging Face resolver, resumable downloads, library
@@ -286,7 +292,7 @@ crates/
   smollm-cli        the `smollm` binary
 desktop/
   src/              React + TypeScript UI (8 pages)
-  src-tauri/        30 commands, event bridge, tray, bundling
+  src-tauri/        38 commands, event bridge, tray, bundling
 ```
 
 ## Roadmap
@@ -294,13 +300,12 @@ desktop/
 In order, and none of it promised:
 
 1. Token-by-token context pressure warnings, and KV-cache quantisation.
-2. Chat history persistence and prompt templates per model family.
-3. A GGUF conversion/import helper for local files not in the catalog.
-4. Auto-update via the Tauri updater plugin, replacing today's "a newer release
+2. A GGUF conversion/import helper for local files not in the catalog.
+3. Auto-update via the Tauri updater plugin, replacing today's "a newer release
    exists" notice.
-5. More catalog coverage: multilingual, code-tuned and vision-capable small
+4. More catalog coverage: multilingual, code-tuned and vision-capable small
    models, each verified the same way.
-6. Signed, notarised macOS and Windows bundles built with `llama-cpp`, so the
+5. Signed, notarised macOS and Windows bundles built with `llama-cpp`, so the
    real engine reaches an install rather than a source build.
 
 ## License

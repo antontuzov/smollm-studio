@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDown,
   Bot,
-  Eraser,
   Gauge,
   MessageSquare,
+  Plus,
   RotateCw,
   Send,
   Square,
@@ -15,6 +15,7 @@ import {
 import { api } from "@/lib/api";
 import { loadModel } from "@/lib/actions";
 import { describeError, formatDuration, formatRate } from "@/lib/format";
+import { persistChat, restoreLatestConversation } from "@/lib/sessions";
 import { useStickToBottom } from "@/lib/use-stick-to-bottom";
 import { useCatalog, usePresets, useSettingsQuery } from "@/lib/queries";
 import { cn, nextId } from "@/lib/utils";
@@ -29,6 +30,7 @@ import { Select, Textarea } from "@/components/ui/field";
 import { EmptyState, Note, Progress, SkeletonList } from "@/components/ui/feedback";
 import { Markdown } from "@/components/ui/markdown";
 import { SamplingPanel } from "@/components/sampling-panel";
+import { SessionPanel } from "@/components/session-panel";
 
 import type { ChatMessage, ChatRequest, SamplingParams } from "@/lib/types";
 
@@ -45,6 +47,7 @@ const fallbackParams: SamplingParams = {
 
 export function ChatPage() {
   const turns = useChat((state) => state.turns);
+  const session = useChat((state) => state.session);
   const draft = useChat((state) => state.draft);
   const setDraft = useChat((state) => state.setDraft);
   const systemPrompt = useChat((state) => state.systemPrompt);
@@ -60,7 +63,7 @@ export function ChatPage() {
   const beginStream = useChat((state) => state.beginStream);
   const failStream = useChat((state) => state.failStream);
   const stopStream = useChat((state) => state.stopStream);
-  const clear = useChat((state) => state.clear);
+  const startNew = useChat((state) => state.startNew);
   const removeTurn = useChat((state) => state.removeTurn);
   const retryLast = useChat((state) => state.retryLast);
 
@@ -114,6 +117,12 @@ export function ChatPage() {
     }
   }, [handle, modelId]);
 
+  // Reopen the last conversation once per launch, so starting a new chat and
+  // returning to this page does not quietly undo it.
+  useEffect(() => {
+    void restoreLatestConversation();
+  }, []);
+
   // Seed sampling from the saved chat preset once the presets arrive.
   useEffect(() => {
     if (params || !presets.data || presets.data.length === 0) {
@@ -155,7 +164,7 @@ export function ChatPage() {
         params: params ?? fallbackParams,
         stop: [],
       };
-      beginStream(trimmed, id, assistantId);
+      beginStream(trimmed, id, assistantId, modelId);
       setDraft("");
       scrollToBottom();
       try {
@@ -188,9 +197,19 @@ export function ChatPage() {
     if (!history || history.length === 0) {
       return;
     }
+    // The dropped answer leaves the file as well as the window.
+    void persistChat();
     const prompt = history[history.length - 1];
     void send(prompt.content, history.slice(0, -1));
   }, [retryLast, send]);
+
+  const remove = useCallback(
+    (id: string) => {
+      removeTurn(id);
+      void persistChat();
+    },
+    [removeTurn],
+  );
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 p-6">
@@ -199,6 +218,11 @@ export function ChatPage() {
           <h1 className="flex items-center gap-2 text-lg font-semibold tracking-tight">
             <MessageSquare className="size-4" />
             Chat
+            {session ? (
+              <span className="min-w-0 truncate text-sm font-normal text-muted-foreground">
+                / {session.title}
+              </span>
+            ) : null}
           </h1>
           <p className="text-xs text-muted-foreground">
             {handle
@@ -221,9 +245,15 @@ export function ChatPage() {
             <Gauge />
             {showParams ? "Hide parameters" : "Parameters"}
           </Button>
-          <Button variant="ghost" size="sm" onClick={clear} disabled={turns.length === 0}>
-            <Eraser />
-            Clear
+          <Button
+            variant="ghost"
+            size="sm"
+            title="Keep this transcript on disk and start an empty one"
+            onClick={startNew}
+            disabled={turns.length === 0}
+          >
+            <Plus />
+            New chat
           </Button>
         </div>
       </div>
@@ -250,7 +280,7 @@ export function ChatPage() {
               <EmptyState
                 icon={MessageSquare}
                 title="No messages yet"
-                description="Ask something short to see how streaming feels. The transcript stays in memory for this session only."
+                description="Ask something short to see how streaming feels. Every finished answer is written to this machine, so closing the window keeps the transcript."
               />
             ) : (
               turns.map((turn) => (
@@ -273,6 +303,13 @@ export function ChatPage() {
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
                         {turn.role === "user" ? "You" : "Model"}
+                        {/* Per-turn rates are stored, so they survive a quit and
+                            a reopen, unlike the header badge. */}
+                        {turn.tokensPerSecond ? (
+                          <span className="ml-1.5 font-mono lowercase tracking-normal">
+                            {formatRate(turn.tokensPerSecond)} tok/s
+                          </span>
+                        ) : null}
                       </span>
                       {/* Visible on hover *and* on keyboard focus, so nobody has
                           to discover these by mouse. */}
@@ -295,7 +332,7 @@ export function ChatPage() {
                           variant="ghost"
                           size="icon-sm"
                           aria-label="Remove message"
-                          onClick={() => removeTurn(turn.id)}
+                          onClick={() => remove(turn.id)}
                         >
                           <X />
                         </Button>
@@ -391,6 +428,8 @@ export function ChatPage() {
         </Card>
 
         <div className="min-h-0 space-y-4 overflow-y-auto pr-0.5">
+          <SessionPanel />
+
           <Card>
             <CardHeader
               title="Model"

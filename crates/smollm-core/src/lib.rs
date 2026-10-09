@@ -10,6 +10,7 @@ pub mod gguf;
 pub mod logs;
 pub mod model;
 pub mod paths;
+pub mod session;
 pub mod system;
 
 pub use config::Settings;

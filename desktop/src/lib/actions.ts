@@ -16,7 +16,8 @@ import { CommandError } from "./types";
 
 import type { DownloadTask, LoadModelOptions, ServerConfig, ServerStatus } from "./types";
 
-function reportFailure(title: string, error: unknown): void {
+/** One toast shape for every failed command helper in `lib/`. */
+export function reportFailure(title: string, error: unknown): void {
   const message = describeError(error);
   const detail = error instanceof CommandError ? error.detail : undefined;
   toast({

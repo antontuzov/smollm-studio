@@ -12,6 +12,7 @@ import {
   usePresets,
   useSettingsQuery,
 } from "@/lib/queries";
+import { useChat } from "@/stores/chat";
 import { useUi } from "@/stores/ui";
 import { PageHeader } from "@/components/page-header";
 import { SamplingPanel } from "@/components/sampling-panel";
@@ -112,6 +113,9 @@ export function SettingsPage() {
       const outcome = await api.resetAppData();
       setResetResult(outcome);
       await queryClient.invalidateQueries();
+      // The window still shows a transcript whose file was just deleted, so it
+      // stops being a saved conversation rather than resurrecting itself.
+      useChat.getState().startNew();
       // Re-seed the draft from the defaults Rust just wrote back.
       setDraft(null);
     } catch (error) {

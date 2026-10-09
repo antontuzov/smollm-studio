@@ -20,6 +20,7 @@ import type {
   ChatDoneEvent,
   ChatErrorEvent,
   ChatRequest,
+  ChatSession,
   ChatTokenEvent,
   DoctorReport,
   DownloadCancelled,
@@ -29,6 +30,7 @@ import type {
   DownloadTask,
   EngineMetrics,
   ErrorPayload,
+  ExportFormat,
   HardwareReport,
   LoadModelOptions,
   LoadModelResponse,
@@ -41,6 +43,8 @@ import type {
   ServerExamples,
   ServerLogEvent,
   ServerStatus,
+  SessionHit,
+  SessionIndex,
   Settings,
 } from "./types";
 
@@ -109,6 +113,18 @@ export const api = {
 
   startChatStream: (request: ChatRequest) => call<string>("start_chat_stream", { request }),
   stopGeneration: (requestId: string) => call<boolean>("stop_generation", { requestId }),
+
+  newChatSession: (systemPrompt: string, modelId?: string | null) =>
+    call<ChatSession>("new_chat_session", { systemPrompt, modelId: modelId ?? null }),
+  saveChatSession: (session: ChatSession) => call<ChatSession>("save_chat_session", { session }),
+  listChatSessions: () => call<SessionIndex>("list_chat_sessions"),
+  searchChatSessions: (query: string) => call<SessionHit[]>("search_chat_sessions", { query }),
+  getChatSession: (id: string) => call<ChatSession>("get_chat_session", { id }),
+  renameChatSession: (id: string, title: string) =>
+    call<ChatSession>("rename_chat_session", { id, title }),
+  deleteChatSession: (id: string) => call<null>("delete_chat_session", { id }),
+  exportChatSession: (id: string, path: string, format: ExportFormat) =>
+    call<string>("export_chat_session", { id, path, format }),
 
   startServer: (config?: ServerConfig) => call<ServerStatus>("start_server", { config }),
   stopServer: () => call<ServerStatus>("stop_server"),

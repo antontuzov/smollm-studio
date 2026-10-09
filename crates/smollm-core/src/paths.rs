@@ -28,6 +28,8 @@ pub struct AppPaths {
     pub models_dir: PathBuf,
     pub logs_dir: PathBuf,
     pub settings_path: PathBuf,
+    /// One JSON file per chat transcript, so quitting loses nothing.
+    pub sessions_dir: PathBuf,
 }
 
 impl AppPaths {
@@ -37,17 +39,24 @@ impl AppPaths {
         let models_dir = models_dir.unwrap_or_else(|| data_dir.join("models"));
         let logs_dir = data_dir.join("logs");
         let settings_path = data_dir.join("settings.json");
+        let sessions_dir = data_dir.join("sessions");
         Self {
             data_dir,
             models_dir,
             logs_dir,
             settings_path,
+            sessions_dir,
         }
     }
 
     /// Create missing directories; safe to call repeatedly.
     pub fn ensure(&self) -> AppResult<()> {
-        for dir in [&self.data_dir, &self.models_dir, &self.logs_dir] {
+        for dir in [
+            &self.data_dir,
+            &self.models_dir,
+            &self.logs_dir,
+            &self.sessions_dir,
+        ] {
             std::fs::create_dir_all(dir).map_err(|source| {
                 AppError::Config(format!("cannot create {}: {source}", dir.display()))
             })?;
@@ -123,6 +132,7 @@ mod tests {
         let paths = AppPaths::new(None);
         assert!(paths.models_dir.starts_with(&paths.data_dir));
         assert!(paths.logs_dir.starts_with(&paths.data_dir));
+        assert!(paths.sessions_dir.starts_with(&paths.data_dir));
         assert_eq!(paths.settings_path.parent(), Some(paths.data_dir.as_path()));
         assert_eq!(paths.model_file("a.gguf"), paths.models_dir.join("a.gguf"));
     }

@@ -19,6 +19,7 @@ use smollm_core::config::Settings;
 use smollm_core::model::{
     estimate_ram_gb, CatalogStatus, LocalModel, ModelDescriptor, ModelMetadata,
 };
+use smollm_core::session::{ChatSession, ExportFormat, SessionHit, SessionIndex, SessionStore};
 use smollm_core::system::{
     AppInfo, Backend, DoctorReport, HardwareReport, LogEntry, LogFilter, LogStream, ServerConfig,
     ServerStatus,
@@ -81,6 +82,7 @@ pub struct ResetOutcome {
     pub cleared_settings: bool,
     pub removed_part_files: usize,
     pub kept_models: usize,
+    pub cleared_conversations: usize,
     pub note: String,
 }
 
@@ -1048,6 +1050,98 @@ fn reveal(path: &str) -> AppResult<()> {
         })
 }
 
+// ---------------------------------------------------------------------------
+// conversations
+//
+// The transcript is the one piece of data here a user cannot regenerate, so it
+// lives on disk through `smollm_core::session` and the UI is a view over it.
+// Saving happens at turn boundaries rather than per token: a stream is not
+// worth a disk write every 15 ms.
+// ---------------------------------------------------------------------------
+
+/// Mint a conversation identity without touching the disk.
+///
+/// Nothing is saved here on purpose: a transcript with no turns is not data
+/// worth keeping, and writing one would create a file the list must hide and
+/// nobody can find. The first real turn creates the file, which is why this is
+/// the one synchronous command in the section — it does no I/O at all.
+#[tauri::command]
+pub fn new_chat_session(system_prompt: String, model_id: Option<String>) -> ChatSession {
+    ChatSession {
+        model_id,
+        ..ChatSession::new(system_prompt)
+    }
+}
+
+/// Upsert. The UI owns the transcript while a stream runs and hands the whole
+/// thing back, so an interrupted save cannot lose earlier turns.
+#[tauri::command]
+pub async fn save_chat_session(state: Shared<'_>, session: ChatSession) -> AppResult<ChatSession> {
+    let store = SessionStore::from_paths(&state.paths());
+    run_blocking(move || {
+        let mut session = session;
+        session.prepare_for_save();
+        store.save(&session)?;
+        Ok(session)
+    })
+    .await?
+}
+
+#[tauri::command]
+pub async fn list_chat_sessions(state: Shared<'_>) -> AppResult<SessionIndex> {
+    let store = SessionStore::from_paths(&state.paths());
+    run_blocking(move || store.index()).await?
+}
+
+#[tauri::command]
+pub async fn search_chat_sessions(state: Shared<'_>, query: String) -> AppResult<Vec<SessionHit>> {
+    let store = SessionStore::from_paths(&state.paths());
+    run_blocking(move || store.search(&query)).await?
+}
+
+#[tauri::command]
+pub async fn get_chat_session(state: Shared<'_>, id: String) -> AppResult<ChatSession> {
+    let store = SessionStore::from_paths(&state.paths());
+    run_blocking(move || store.load(&id)).await?
+}
+
+#[tauri::command]
+pub async fn rename_chat_session(
+    state: Shared<'_>,
+    id: String,
+    title: String,
+) -> AppResult<ChatSession> {
+    let store = SessionStore::from_paths(&state.paths());
+    run_blocking(move || {
+        let mut session = store.load(&id)?;
+        session.rename(&title);
+        store.save(&session)?;
+        Ok(session)
+    })
+    .await?
+}
+
+#[tauri::command]
+pub async fn delete_chat_session(state: Shared<'_>, id: String) -> AppResult<()> {
+    let store = SessionStore::from_paths(&state.paths());
+    run_blocking(move || store.delete(&id)).await?
+}
+
+/// Write a transcript somewhere the user chose in the save dialog.
+#[tauri::command]
+pub async fn export_chat_session(
+    state: Shared<'_>,
+    id: String,
+    path: String,
+    format: ExportFormat,
+) -> AppResult<String> {
+    let store = SessionStore::from_paths(&state.paths());
+    let written = run_blocking(move || store.export(&id, Path::new(&path), format)).await??;
+    let exported = written.display().to_string();
+    tracing::info!(target: "app", exported_to = %exported, "conversation exported");
+    Ok(exported)
+}
+
 #[tauri::command]
 pub async fn reset_app_data(app: AppHandle, state: Shared<'_>) -> AppResult<ResetOutcome> {
     let paths = state.paths();
@@ -1063,16 +1157,41 @@ pub async fn reset_app_data(app: AppHandle, state: Shared<'_>) -> AppResult<Rese
     // user and are removed one by one from the Library page.
     let models_dir = paths.models_dir.clone();
     let removed = run_blocking(move || remove_part_files(&models_dir)).await?;
+    let sessions_dir = paths.sessions_dir.clone();
+    let cleared_conversations = run_blocking(move || clear_sessions(&sessions_dir)).await?;
     let kept = count_gguf_files(&paths.models_dir);
     let info = build_app_info(&app, &state)?;
-    tracing::warn!(target: "app", removed, kept, "app data reset");
+    tracing::warn!(
+        target: "app",
+        removed,
+        kept,
+        cleared_conversations,
+        "app data reset"
+    );
     Ok(ResetOutcome {
         info,
         cleared_settings: true,
         removed_part_files: removed,
         kept_models: kept,
-        note: "Settings and the log buffer were reset. Downloaded models were kept; delete them from the Library page.".to_string(),
+        cleared_conversations,
+        note: format!(
+            "Settings, logs and {cleared_conversations} saved conversation(s) were reset. \
+             Downloaded models were kept; delete them from the Library page."
+        ),
     })
+}
+
+/// Remove every saved transcript. Export them from the Chat page first if the
+/// conversations matter: this is the one destructive thing reset does.
+fn clear_sessions(dir: &Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
+        .filter(|path| std::fs::remove_file(path).is_ok())
+        .count()
 }
 
 fn remove_part_files(dir: &Path) -> usize {
@@ -1279,6 +1398,23 @@ mod tests {
     }
 
     #[test]
+    fn reset_only_clears_saved_conversations() {
+        let dir =
+            std::env::temp_dir().join(format!("smollm-sessions-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        std::fs::write(dir.join("one.json"), "{}").expect("written");
+        std::fs::write(dir.join("two.json"), "{}").expect("written");
+        // A transcript still being written must not be taken as a conversation.
+        std::fs::write(dir.join("three.json.tmp"), "{}").expect("written");
+        std::fs::write(dir.join("notes.md"), "keep me").expect("written");
+
+        assert_eq!(clear_sessions(&dir), 2);
+        assert!(dir.join("notes.md").exists());
+        assert!(dir.join("three.json.tmp").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn reset_note_explains_that_models_are_kept() {
         let outcome = ResetOutcome {
             info: AppInfo {
@@ -1296,10 +1432,14 @@ mod tests {
             cleared_settings: true,
             removed_part_files: 0,
             kept_models: 3,
-            note: "Settings and the log buffer were reset. Downloaded models were kept; delete them from the Library page.".to_string(),
+            cleared_conversations: 2,
+            note: "Settings, logs and 2 saved conversation(s) were reset. \
+                   Downloaded models were kept; delete them from the Library page."
+                .to_string(),
         };
         let json = serde_json::to_value(&outcome).expect("serialises");
         assert_eq!(json["keptModels"], 3);
+        assert_eq!(json["clearedConversations"], 2);
         assert!(json["note"]
             .as_str()
             .is_some_and(|note| note.contains("models were kept")));

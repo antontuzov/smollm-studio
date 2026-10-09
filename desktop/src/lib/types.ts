@@ -300,6 +300,50 @@ export interface ChatRequest {
   stop: string[];
 }
 
+/** One turn as stored on disk. */
+export interface StoredTurn {
+  role: Role;
+  content: string;
+  createdAtMs: number;
+  /** Set when the answer failed; the partial text is kept alongside it. */
+  error?: string | null;
+  tokensPerSecond?: number | null;
+}
+
+/** A conversation, persisted as one JSON file per session. */
+export interface ChatSession {
+  id: string;
+  title: string;
+  createdAtMs: number;
+  updatedAtMs: number;
+  modelId: string | null;
+  systemPrompt: string;
+  turns: StoredTurn[];
+}
+
+export interface SessionSummary {
+  id: string;
+  title: string;
+  createdAtMs: number;
+  updatedAtMs: number;
+  turnCount: number;
+  modelId: string | null;
+  preview: string;
+}
+
+/** A search match: the summary plus the line that matched. */
+export interface SessionHit extends SessionSummary {
+  snippet: string;
+}
+
+export interface SessionIndex {
+  sessions: SessionSummary[];
+  /** Transcript files that exist but do not parse, named rather than hidden. */
+  unreadable: string[];
+}
+
+export type ExportFormat = "markdown" | "json";
+
 export interface TokenUsage {
   promptTokens: number;
   completionTokens: number;
@@ -445,6 +489,7 @@ export interface ResetOutcome {
   clearedSettings: boolean;
   removedPartFiles: number;
   keptModels: number;
+  clearedConversations: number;
   note: string;
 }
 

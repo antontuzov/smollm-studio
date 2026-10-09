@@ -3,7 +3,8 @@
  *
  * Subscriptions live here so a stream keeps filling the transcript even when the
  * user is on another page, and so exactly one place owns cache invalidation and
- * the shared stores.
+ * the shared stores. A finished or failed answer is a turn boundary, which is
+ * also the moment the transcript is worth writing to disk.
  */
 
 import { useEffect } from "react";
@@ -12,6 +13,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { events, onDownloadUpdates } from "@/lib/api";
 import { formatBytes } from "@/lib/format";
 import { useDownloadSnapshot, useEngineMetrics, queryKeys } from "@/lib/queries";
+import { persistChat } from "@/lib/sessions";
 import { useBenchmark } from "@/stores/benchmark";
 import { useChat } from "@/stores/chat";
 import { useDownloads, useEngine } from "@/stores/engine";
@@ -75,12 +77,15 @@ export function EventBridge() {
         });
         // Token counters moved, so the metrics panels should re-read them.
         void queryClient.invalidateQueries({ queryKey: queryKeys.engineMetrics });
+        void persistChat();
       }),
     );
     register(
       events.onChatError((event) => {
         if (isCurrentChat(event.requestId)) {
           useChat.getState().failStream(event.message);
+          // Whatever did arrive before the failure is worth keeping.
+          void persistChat();
           return;
         }
         if (event.requestId === "benchmark") {

@@ -103,6 +103,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   print hundreds of lines per generation straight to stderr, past the log file and
   past every filter; they are routed into the app's own subscriber now, so
   `RUST_LOG` decides what is shown and the Logs page keeps the rest.
+- **Conversations survive quitting the app.** A chat used to live only in memory,
+  so closing the window deleted it. Each finished answer is now written to
+  `<data dir>/sessions/<id>.json` as one file per conversation — JSON rather than
+  SQLite, so nothing new has to be installed to read it, written to a temporary
+  name and renamed so a crash mid-write cannot leave a half-transcript. A new
+  `smollm-core::session` module owns the format and the round trip
+  (`save`/`load`/`index`/`search`/`export`), and the Chat page has a
+  *Conversations* panel that lists them, reopens one on click, renames it,
+  searches titles and answers, exports to Markdown or JSON through the OS save
+  panel, and deletes. Saves happen at turn boundaries rather than per token, are
+  serialised so two events in the same tick cannot mint two files, and name the
+  file after the first question. A transcript with no turns is never written, so
+  an abandoned window leaves no orphan. The last conversation reopens on launch,
+  a corrupt file is listed as unreadable instead of hiding the rest, *Reset app
+  data* reports how many conversations it cleared and keeps the models, and
+  nothing leaves the machine.
 
 ### Fixed
 

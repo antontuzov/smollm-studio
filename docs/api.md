@@ -123,7 +123,8 @@ they are never stale.
 
 ## Tauri commands
 
-30 commands, all `async`; filesystem and `sysinfo` work moves to the blocking
+38 commands, all `async` but for `new_chat_session` (which mints an identity and
+does no I/O); filesystem and `sysinfo` work moves to the blocking
 pool so the main thread never stalls. Arguments are camelCase in JavaScript and
 snake_case in Rust. Every rejection serialises to `{ code, message, detail }`.
 
@@ -133,6 +134,7 @@ snake_case in Rust. Every rejection serialises to `{ code, message, detail }`.
 | Models | `list_catalog_models`, `catalog_facets`, `list_local_models`, `pull_model`, `cancel_download`, `retry_download`, `get_download_snapshot`, `delete_local_model` |
 | Engine | `load_model`, `unload_model`, `get_engine_metrics`, `get_presets` |
 | Chat | `start_chat_stream`, `stop_generation` |
+| Conversations | `new_chat_session`, `save_chat_session`, `list_chat_sessions`, `search_chat_sessions`, `get_chat_session`, `rename_chat_session`, `delete_chat_session`, `export_chat_session` |
 | Server | `start_server`, `stop_server`, `get_server_status`, `get_server_examples` |
 | Benchmarks | `run_benchmark` |
 | Logs | `get_logs`, `clear_logs` |
@@ -157,6 +159,22 @@ with counts, derived from the loaded catalog including any local overlay.
 model that was never explicitly loaded. `run_benchmark` uses its own engine
 instance so it never competes with the chat; on failure it reports through
 `chat-error` with `requestId: "benchmark"`.
+
+Conversations are one JSON file per chat under `<data dir>/sessions/<id>.json`,
+written to a temporary name and renamed, so an interrupted write cannot leave a
+half transcript. Rust mints the id — `new_chat_session` returns an identity
+without touching the disk, and `save_chat_session` stamps `updatedAtMs` and titles
+an untitled chat after its first question before writing. So the frontend can keep
+sending the placeholder title, and the file name and the store cannot disagree
+about which chat a turn belongs to. `list_chat_sessions` returns a
+`SessionIndex`: summaries newest first, each with `turnCount`, `modelId` and a
+`preview`, plus an `unreadable` list of file names that failed to parse — a broken
+transcript is reported, never silently dropped from the list.
+`search_chat_sessions` matches titles and turn text and returns hits with a
+`snippet` around the match. `export_chat_session` takes a destination path plus
+`markdown` or `json` and returns the path written, so the OS save panel decides
+where a conversation goes. Ids are restricted to `[A-Za-z0-9_-]` (64 chars max),
+which is also what stops a path from arriving in one.
 
 `get_server_status` returns `running`, `host`, `port`, `baseUrl`, `engine`,
 `loadedModel`, `servedModels`, `requests`, `uptimeSeconds` and `simulated`.

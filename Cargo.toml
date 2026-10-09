@@ -74,6 +74,9 @@ llama-cpp-2 = { version = "0.1.159", default-features = false }
 # --- desktop ---
 tauri = { version = "2", features = [] }
 tauri-build = { version = "2", features = [] }
+# Native open/save panels. Importing a model and exporting a transcript both
+# need a real path, and the webview will not hand one out without this.
+tauri-plugin-dialog = { version = "2" }
 
 [profile.release]
 opt-level = 3
