@@ -1,17 +1,55 @@
 //! What the agent can actually do, as data.
 //!
-//! A tool is a name, a description the model reads, a JSON schema its arguments
-//! are validated against, a permission class the sandbox enforces, a timeout and
-//! an output ceiling. The registry is the same list the CLI prints, the schema
-//! the provider embeds in its prompt, and the gate a tool call passes through
-//! before any code runs — so "what this agent is capable of" has exactly one
-//! answer.
+//! A tool is a name, a description the model reads, a JSON Schema its arguments
+//! are validated against, an intent the sandbox checks before anything runs, a
+//! timeout and an output ceiling. The registry is the same list the CLI prints,
+//! the set of schemas a provider embeds in its prompt, and the gate a call
+//! passes through on its way to an implementation — so "what this agent is
+//! capable of" has exactly one answer.
 //!
-//! This crate owns the implementations (file reads, search, git, test and lint
-//! runners) and nothing about the agent's reasoning: a tool never decides
-//! whether it should have been called.
+//! This crate owns the implementations and nothing about the agent's reasoning:
+//! a tool never decides whether it should have been called, and cannot widen
+//! what it is allowed to touch. Seven of the nine tools read. The two that write
+//! — `write_file` and `patch_file` — delegate the diff and the rollback to
+//! `agent-repo`, and record what they replaced in [`Context::rollback`] so a run
+//! that went wrong can be undone.
+//!
+//! ```
+//! use agent_tools::{Context, Registry, ToolCall};
+//! use serde_json::json;
+//!
+//! let registry = Registry::with_defaults();
+//! let context = Context::new(env!("CARGO_MANIFEST_DIR"));
+//! let runtime = tokio::runtime::Runtime::new().expect("a runtime to run one call in");
+//!
+//! // A path that climbs out of the repository is refused before the filesystem
+//! // is touched, and the answer says why.
+//! let call = ToolCall::new("read_file", json!({"path": "../../../../etc/passwd"}));
+//! let result = runtime.block_on(registry.execute(&call, &context));
+//! assert!(!result.is_success());
+//! assert!(result.summary().contains("climbs out"), "{}", result.summary());
+//!
+//! // A tool that does not exist is not an error to retry blindly: the answer
+//! // names the ones that do.
+//! let call = ToolCall::new("delete_repo", json!({}));
+//! let result = runtime.block_on(registry.execute(&call, &context));
+//! assert!(result.summary().contains("no tool named"), "{}", result.summary());
+//! ```
 
 mod call;
+mod context;
+mod filesystem;
+mod git;
+mod registry;
+mod schema;
+mod search;
+mod shell;
+mod tool;
+mod write;
 
 pub use agent_sandbox::Permission;
 pub use call::{ToolCall, ToolOutput, ToolResult, ToolStatus};
+pub use context::Context;
+pub use registry::{needs_approval, summarise, Registry, ToolInfo};
+pub use tool::{Intent, Tool, ToolDefinition, DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_TIMEOUT_SECONDS};
+pub use write::{PatchFile, WriteFile};

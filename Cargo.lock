@@ -87,7 +87,6 @@ name = "agent-repo"
 version = "0.1.0"
 dependencies = [
  "agent-sandbox",
- "cargo_metadata 0.18.1",
  "globset",
  "ignore",
  "serde",
@@ -96,17 +95,20 @@ dependencies = [
  "smollm-core",
  "tempfile",
  "thiserror 2.0.21",
+ "toml 0.8.2",
  "tracing",
- "walkdir",
 ]
 
 [[package]]
 name = "agent-sandbox"
 version = "0.1.0"
 dependencies = [
+ "agent-config",
+ "globset",
  "serde",
  "serde_json",
  "smollm-core",
+ "tempfile",
  "thiserror 2.0.21",
  "tracing",
 ]
@@ -115,9 +117,10 @@ dependencies = [
 name = "agent-tools"
 version = "0.1.0"
 dependencies = [
+ "agent-config",
+ "agent-repo",
  "agent-sandbox",
  "async-trait",
- "futures",
  "globset",
  "ignore",
  "serde",
@@ -127,7 +130,6 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
- "walkdir",
 ]
 
 [[package]]
@@ -523,20 +525,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e35af189006b9c0f00a064685c727031e3ed2d8020f7ba284d78cc2671bd36ea"
 dependencies = [
  "serde",
-]
-
-[[package]]
-name = "cargo_metadata"
-version = "0.18.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d886547e41f740c616ae73108f6eb70afe6d940c7bc697cb30f13daec073037"
-dependencies = [
- "camino",
- "cargo-platform",
- "semver",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -4469,7 +4457,7 @@ checksum = "2ff55a614843b9a3f010f211df637c94df2607175b8d0f6e0f4a7c19e18621ee"
 dependencies = [
  "anyhow",
  "brotli",
- "cargo_metadata 0.19.2",
+ "cargo_metadata",
  "ctor",
  "dom_query",
  "dunce",

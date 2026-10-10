@@ -85,11 +85,16 @@ warning naming both numbers, when it asks for more than the host has.
 - **The coding agent is mid-build.** A second binary, `smoll`, exists in
   `crates/agent-cli` and currently resolves and prints its configuration
   (`smoll init`, `smoll config`); `doctor`, `tools` and `task` answer that they
-  are not wired yet, and there is no `chat` until the loop exists. What is
-  finished is the parts a loop needs to be built on: configuration, the tool and
-  sandbox vocabulary, and a provider layer whose only working providers are the
-  scripted mock and the echo inspector. Its GGUF and OpenAI-compatible adapters
-  return an error naming the missing piece rather than falling back to the mock.
+  are not wired yet, and there is no `chat`. The loop itself is built and tested:
+  it gathers repository context, proposes a plan, asks a provider for tool calls,
+  gates every call through the sandbox policy, repairs a truncated answer once,
+  proposes a diff in `suggest-only`, writes with approval, runs the project's own
+  validation command and can undo what it wrote — driven end to end in
+  [crates/agent-core/tests/loop_runs.rs](crates/agent-core/tests/loop_runs.rs)
+  against the scripted mock. That mock is the only provider that answers today,
+  alongside the echo inspector, which reports what a prompt costs: the GGUF and
+  OpenAI-compatible adapters return an error naming the missing piece rather
+  than falling back to the mock.
 
 We deliberately did not rewrite llama.cpp. The engine is an abstraction
 (`Engine` + `EngineManager`) with one integration point per backend, so each
@@ -352,11 +357,11 @@ crates/
   smollm-server     Axum OpenAI-compatible API
   smollm-cli        the `smollm` binary
   agent-config      the TOML the agent runs on, plus env and CLI overrides
-  agent-sandbox     permission classes and secret redaction
-  agent-tools       tool calls, results and status; the registry lands next
-  agent-repo        repo map and search — specified in its own words, not built yet
+  agent-sandbox     policy, approval modes, audit log and secret redaction
+  agent-tools       the nine tools, their registry, the gate and rollback journal
+  agent-repo        ignore-aware index, repo map, search ranking and unified diffs
   agent-providers   Provider trait, tool-call parsing, Mock and Echo providers
-  agent-core        the loop's types and errors; the loop itself is next
+  agent-core        the loop: context, plan, tools, repair, approval, validation
   agent-cli         the `smoll` binary
 desktop/
   src/              React + TypeScript UI (8 pages)

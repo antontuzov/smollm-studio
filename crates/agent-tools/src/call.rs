@@ -165,6 +165,9 @@ pub struct ToolResult {
     pub status: ToolStatus,
     pub output: ToolOutput,
     pub duration_ms: u64,
+    /// How many credentials the mask replaced on the way out, so a transcript
+    /// can say it hid something rather than not mention it.
+    pub redactions: usize,
 }
 
 impl ToolResult {
@@ -180,6 +183,7 @@ impl ToolResult {
             status: ToolStatus::Completed,
             output,
             duration_ms,
+            redactions: 0,
         }
     }
 
@@ -197,6 +201,7 @@ impl ToolResult {
             },
             output,
             duration_ms: 0,
+            redactions: 0,
         }
     }
 
@@ -209,6 +214,21 @@ impl ToolResult {
             },
             output: ToolOutput::empty(),
             duration_ms: 0,
+            redactions: 0,
+        }
+    }
+
+    /// Nothing ran, because the approval mode says a person has to answer first.
+    /// The `question` is what that person is shown, so it has to name the thing
+    /// about to happen rather than the rule that stopped it.
+    pub fn awaiting(call: ToolCall, permission: Permission, question: impl Into<String>) -> Self {
+        Self {
+            output: ToolOutput::new(question.into()),
+            call,
+            permission,
+            status: ToolStatus::AwaitingApproval,
+            duration_ms: 0,
+            redactions: 0,
         }
     }
 

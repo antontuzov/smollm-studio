@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use agent_sandbox::Permission;
 use agent_tools::ToolResult;
 use serde::{Deserialize, Serialize};
-use smollm_core::chat::approx_token_count;
+use smollm_core::chat::{approx_token_count, TokenUsage};
 use uuid::Uuid;
 
 /// Milliseconds since the epoch, the only timestamp format shared by the audit
@@ -331,6 +331,10 @@ pub struct Session {
     /// Secrets the tools' output contained and masked, counted so a transcript
     /// can say it hid something rather than not mention it.
     pub redactions: usize,
+    /// What the run cost, added up across its steps. The loop is the only thing
+    /// that sees a provider's usage line, and `smoll task --json` has to print a
+    /// number a person can compare against their model's window.
+    pub usage: TokenUsage,
 }
 
 impl Session {
@@ -344,7 +348,17 @@ impl Session {
             events: Vec::new(),
             touched: Vec::new(),
             redactions: 0,
+            usage: TokenUsage::default(),
         }
+    }
+
+    /// Add one step's usage to the run's total. The loop is the only caller: a
+    /// provider reports what it spent, and the session is where the number ends
+    /// up for `smoll task --json` and for the TUI's status line.
+    pub fn note_usage(&mut self, usage: &TokenUsage) {
+        self.usage.prompt_tokens += usage.prompt_tokens;
+        self.usage.completion_tokens += usage.completion_tokens;
+        self.usage.total_tokens += usage.total_tokens;
     }
 
     /// Record one event. Every mutation of a session goes through here so the
@@ -705,6 +719,23 @@ mod tests {
             !back.plan.expect("kept").is_complete(),
             "a set plan is not yet a finished one"
         );
+    }
+
+    #[test]
+    fn a_sessions_total_is_the_sum_of_what_each_step_spent() {
+        let mut session = Session::new("count the tokens");
+        assert_eq!(session.usage, TokenUsage::default());
+        session.note_usage(&TokenUsage::new(100, 20));
+        session.note_usage(&TokenUsage::new(140, 8));
+        assert_eq!(session.usage.prompt_tokens, 240);
+        assert_eq!(session.usage.completion_tokens, 28);
+        assert_eq!(
+            session.usage.total_tokens, 268,
+            "every step's prompt is paid again, and the total says so"
+        );
+
+        let json = serde_json::to_string(&session).expect("serialisable");
+        assert!(json.contains("\"promptTokens\":240"), "{json}");
     }
 
     #[test]
