@@ -11,3 +11,16 @@
 //! Diffs are the format a small model is least likely to get wrong, so
 //! patch application lives here and is tested against files that do not match
 //! the hunk headers.
+
+pub mod index;
+pub mod map;
+pub mod patch;
+pub mod project;
+
+pub use index::{FileEntry, Index, Language, AGENT_IGNORE_FILE, MAX_READ_BYTES};
+pub use map::{Candidate, RepoMap, Scored};
+pub use patch::{
+    apply, diff, diff_against_disk, plan, stats, touched_paths, write, Kind, PatchError, Planned,
+    Restored, Snapshot, Stat,
+};
+pub use project::{Crate, Ecosystem, Project, Purpose, Suggestion};

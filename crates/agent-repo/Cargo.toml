@@ -10,7 +10,10 @@ repository.workspace = true
 [dependencies]
 agent-sandbox.workspace = true
 smollm-core.workspace = true
-cargo_metadata.workspace = true
+# Manifests are read as files, not by asking cargo: `cargo metadata` resolves
+# the dependency graph, which can reach the registry over the network. A
+# local-first agent answers "what is this project" from the text on disk.
+toml.workspace = true
 globset.workspace = true
 ignore.workspace = true
 serde.workspace = true
@@ -18,7 +21,6 @@ serde_json.workspace = true
 similar.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-walkdir.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
