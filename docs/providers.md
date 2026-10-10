@@ -43,10 +43,10 @@ let error = build("local", &config).unwrap_err();
 assert!(!error.retryable());
 ```
 
-That message is what a CLI run will print once `smoll task` and `smoll chat` are
-wired to the loop; today those subcommands answer `not wired yet`, because the
-loop itself is the next phase. Nothing in this document that is not in the
-"built" row above has reached a terminal yet.
+That message is what a CLI run will print once the loop is wired behind
+`smoll task`. Today the subcommand answers `not wired yet`, and `smoll chat` is
+not a subcommand at all. Nothing in this document that is not in the "built" row
+above has reached a terminal yet.
 
 ## Capabilities are asked, not assumed
 

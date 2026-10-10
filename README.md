@@ -1,3 +1,8 @@
+<p align="center">
+  <img src="assets/brand/logo-light.png" width="132" height="132"
+       alt="SmolLLM Studio logo: an eight-lobed mark in an indigo-to-cyan gradient on white">
+</p>
+
 # SmolLLM Studio
 
 **Run small local LLMs beautifully on macOS and Windows.**
@@ -10,16 +15,13 @@ OpenAI-compatible server on loopback — all on your own machine.
 There is no account, no API key and no telemetry. The only network traffic the
 app ever makes is the model download you explicitly ask for. There is no
 update pinger, no analytics, and no background request of any kind — the HTTP
-server you start stays on `127.0.0.1`.
+server you start stays on `127.0.0.1`. [docs/privacy.md](docs/privacy.md) lists
+every request and every file, so you can check that sentence.
 
-![Home](assets/screenshots/home.png)
-![Chat](assets/screenshots/chat.png)
-![Server](assets/screenshots/server.png)
-
-> Screenshots are not committed to this repository, so the three tags above are
-> broken until you add them. See
-> [assets/screenshots/README.md](assets/screenshots/README.md) for the five
-> captures that belong here and how to take them.
+> No screenshots are committed yet, so this README has no pictures of the app.
+> [assets/screenshots/README.md](assets/screenshots/README.md) names the five
+> captures that belong here, the exact state each one should show, and how to
+> take them.
 
 ---
 
@@ -80,6 +82,14 @@ warning naming both numbers, when it asks for more than the host has.
   it — Mock answers rather than the app failing to start. That is deliberate.
 - **`candle` is an adapter without a runner.** The feature compiles the seam and
   clearly reports that it cannot serve a request, so it never displaces Mock.
+- **The coding agent is mid-build.** A second binary, `smoll`, exists in
+  `crates/agent-cli` and currently resolves and prints its configuration
+  (`smoll init`, `smoll config`); `doctor`, `tools` and `task` answer that they
+  are not wired yet, and there is no `chat` until the loop exists. What is
+  finished is the parts a loop needs to be built on: configuration, the tool and
+  sandbox vocabulary, and a provider layer whose only working providers are the
+  scripted mock and the echo inspector. Its GGUF and OpenAI-compatible adapters
+  return an error naming the missing piece rather than falling back to the mock.
 
 We deliberately did not rewrite llama.cpp. The engine is an abstraction
 (`Engine` + `EngineManager`) with one integration point per backend, so each
@@ -120,7 +130,10 @@ library is a contained change:
 1. Download the latest release:
    - macOS: `SmolLLM_0.1.0_aarch64.dmg`
    - Windows: `SmolLLM_0.1.0_x64-setup.exe` (or the `.msi`)
-2. Open it. The app detects your hardware and shows what will fit.
+2. Open it. The first launch answers three questions before anything else: what
+   stays on this machine, what this machine can actually run, and which small
+   model to fetch first. Close it as soon as you have read it — that counts as
+   finishing. Afterwards the app just detects your hardware and shows what fits.
 3. On the **Models** page, press **Download** on something small — Qwen2.5 0.5B
    or SmolLM2 360M are good first runs.
 4. Press **Load**, then **Chat**.
@@ -303,9 +316,29 @@ for chunk in stream:
 ```
 
 No key is checked, which is safe only because the server refuses to bind to
-anything but loopback. The Server page generates both snippets with your actual
-port and model filled in. Full reference:
-[docs/api.md](docs/api.md).
+anything but loopback — [SECURITY.md](SECURITY.md) says what that does not cover
+before you point another program at that port on a shared machine. The Server
+page generates both snippets with your actual port and model filled in. Full
+reference: [docs/api.md](docs/api.md).
+
+## Security and privacy
+
+Three files state what the code does rather than what a product page would
+prefer:
+
+- [SECURITY.md](SECURITY.md) — what is protected (loopback-only bind, keychain
+  storage for a Hugging Face token, the webview's Content-Security-Policy,
+  download validation) and, in as much space, what is not: an unauthenticated
+  local API, untrusted model output, plaintext transcripts, unsigned releases.
+- [docs/privacy.md](docs/privacy.md) — the no-telemetry claim with the evidence:
+  the only two requests the app ever makes, what the registry sees when you make
+  one, every file it writes and where, and how to remove all of it.
+- [NOTICE](NOTICE) — llama.cpp and the bindings that build it, Inter's font
+  licence, the pinned dependency tree, and the licences model weights travel
+  under.
+
+Report a vulnerability as a private GitHub advisory rather than a public issue;
+where to send it and what to include is in `SECURITY.md`.
 
 ## How it is laid out
 
@@ -318,10 +351,23 @@ crates/
   smollm-hardware   sysinfo detection, GPU probing, the doctor
   smollm-server     Axum OpenAI-compatible API
   smollm-cli        the `smollm` binary
+  agent-config      the TOML the agent runs on, plus env and CLI overrides
+  agent-sandbox     permission classes and secret redaction
+  agent-tools       tool calls, results and status; the registry lands next
+  agent-repo        repo map and search — specified in its own words, not built yet
+  agent-providers   Provider trait, tool-call parsing, Mock and Echo providers
+  agent-core        the loop's types and errors; the loop itself is next
+  agent-cli         the `smoll` binary
 desktop/
   src/              React + TypeScript UI (8 pages)
   src-tauri/        41 commands, event bridge, tray, bundling
 ```
+
+The `agent-*` crates are the coding agent being built on top of the model layer,
+and the desktop app is frozen while that happens: it keeps passing its gates and
+gets no new features. Configuration is documented in
+[docs/agent-config.md](docs/agent-config.md), the provider layer in
+[docs/providers.md](docs/providers.md).
 
 ## Roadmap
 
@@ -340,7 +386,9 @@ In order, and none of it promised:
 ## License
 
 MIT — see [LICENSE](LICENSE). Your models stay yours; their licenses travel
-with them.
+with them, and [NOTICE](NOTICE) lists the parts of this app that are not ours:
+llama.cpp behind a feature flag, the Inter font files under the SIL Open Font
+Licence, and the pinned dependency tree.
 
 ## Contributing
 
