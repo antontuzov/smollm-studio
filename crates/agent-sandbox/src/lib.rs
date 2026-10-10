@@ -12,8 +12,12 @@
 //! Nothing in this crate runs a command or opens a network connection. It
 //! answers questions about whether something may be done.
 
+mod audit;
 mod permission;
+mod policy;
 mod redact;
 
+pub use audit::{read_entries, AuditLog, Entry, AUDIT_FILE};
 pub use permission::Permission;
-pub use redact::{find_secret_shapes, redact};
+pub use policy::{classify, Action, Decision, Policy};
+pub use redact::{find_secret_shapes, redact, Redaction};

@@ -557,3 +557,28 @@ fn an_absolute_xdg_config_home_is_required_before_it_is_used() {
         "it falls back to HOME, not the relative path"
     );
 }
+
+#[test]
+fn a_tool_section_that_only_sets_a_timeout_leaves_the_tool_on() {
+    // `enabled` defaults to true when it is parsed, so a hand-built policy that
+    // said false would make the two ways of writing a configuration disagree.
+    let dir = clean_dir();
+    std::fs::write(
+        dir.path().join("smoll.toml"),
+        "[tools.read_file]\ntimeout_seconds = 5\ndenylist = [\"secrets/**\"]\n",
+    )
+    .expect("writable");
+    let loaded = load_in(dir.path(), &Vec::new()).expect("a valid section");
+    let from_file = &loaded.config.tools["read_file"];
+    assert!(from_file.enabled, "an absent key means on");
+    assert_eq!(from_file.timeout_seconds, Some(5));
+    assert_eq!(
+        *from_file,
+        agent_config::ToolPolicy {
+            timeout_seconds: Some(5),
+            denylist: vec!["secrets/**".to_owned()],
+            ..agent_config::ToolPolicy::default()
+        },
+        "the default is the parsed one, so a caller can build a policy in code"
+    );
+}

@@ -335,7 +335,7 @@ impl ProviderConfig {
 }
 
 /// Per-tool settings, from `[tools.<name>]`.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ToolPolicy {
     #[serde(default = "default_true")]
@@ -350,6 +350,23 @@ pub struct ToolPolicy {
     pub timeout_seconds: Option<u64>,
     #[serde(default)]
     pub max_output_bytes: Option<usize>,
+}
+
+/// Written by hand rather than derived, because the derived default has
+/// `enabled: false` — and a tool section a caller constructed to set a timeout
+/// or a denylist is a tool they intend to use. This matches what
+/// `[tools.read_file]` with no `enabled` key parses to.
+impl Default for ToolPolicy {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            sandbox: None,
+            allowlist: Vec::new(),
+            denylist: Vec::new(),
+            timeout_seconds: None,
+            max_output_bytes: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
