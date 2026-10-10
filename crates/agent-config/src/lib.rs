@@ -8,3 +8,25 @@
 //! cannot be parsed is reported with its path and the offending key rather than
 //! silently falling back to defaults, because a silently ignored `sandbox =
 //! "strict"` is a security failure.
+//!
+//! ```no_run
+//! use std::path::Path;
+//!
+//! let loaded = agent_config::load(Path::new(".")).expect("a valid configuration");
+//! println!("{} {}", loaded.config.agent.approval_mode, loaded.warnings.len());
+//! ```
+
+mod error;
+mod load;
+mod starter;
+mod types;
+
+pub use error::{ConfigError, Problem};
+pub use load::{load, load_with, Loaded, ENV_VARS, PROJECT_FILE};
+pub use starter::{starter_toml, write_starter};
+pub use types::{
+    AgentSection, ApprovalMode, Config, PrivacySection, ProviderConfig, ProviderKind, SandboxMode,
+    Theme, ToolPolicy, UiSection,
+};
+
+pub use load::user_config_path;
