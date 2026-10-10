@@ -11,3 +11,9 @@
 //!
 //! Nothing in this crate runs a command or opens a network connection. It
 //! answers questions about whether something may be done.
+
+mod permission;
+mod redact;
+
+pub use permission::Permission;
+pub use redact::{find_secret_shapes, redact};

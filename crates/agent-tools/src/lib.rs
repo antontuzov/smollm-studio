@@ -10,3 +10,8 @@
 //! This crate owns the implementations (file reads, search, git, test and lint
 //! runners) and nothing about the agent's reasoning: a tool never decides
 //! whether it should have been called.
+
+mod call;
+
+pub use agent_sandbox::Permission;
+pub use call::{ToolCall, ToolOutput, ToolResult, ToolStatus};

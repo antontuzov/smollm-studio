@@ -10,3 +10,14 @@
 //! `Session`, `Outcome`) and the orchestration. It calls providers and tools
 //! through their traits, so a run against a scripted mock and a run against a
 //! 1.5B GGUF on a laptop go through the same code.
+
+mod error;
+mod types;
+
+pub use agent_sandbox::Permission;
+pub use agent_tools::{ToolCall, ToolOutput, ToolResult, ToolStatus};
+pub use error::{AgentError, Budget};
+pub use types::{
+    now_ms, AgentEvent, ApprovalDecision, ApprovalRequest, ContextBundle, ContextFile, Outcome,
+    Plan, PlanStep, Session, StepStatus,
+};
