@@ -12,8 +12,9 @@ name = "smoll"
 path = "src/main.rs"
 
 [features]
-default = ["mock-provider"]
-mock-provider = ["agent-providers/mock"]
+# No backend by default: `smoll` runs against the mock and echo providers, and a
+# real one is opt-in with the feature it names.
+default = []
 openai-compatible = ["agent-providers/openai-compatible"]
 gguf = ["agent-providers/gguf"]
 llama-cpp = ["agent-providers/llama-cpp"]

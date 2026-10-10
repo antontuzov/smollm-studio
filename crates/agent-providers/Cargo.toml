@@ -8,10 +8,10 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = ["mock"]
-# Scripted and echo providers: always available, no dependencies, and what
-# every test in this workspace runs against.
-mock = []
+# The mock and echo providers are unconditional: no dependencies, no build cost,
+# and every test in this workspace runs against one of them. Only a real
+# inference backend is a feature, so that no heavy dependency arrives by default.
+default = []
 # Any server that speaks the OpenAI wire format: Ollama, LM Studio, vLLM, TGI,
 # llama-server, or smollm-server from this repository.
 openai-compatible = ["dep:reqwest", "dep:url"]
@@ -21,6 +21,7 @@ gguf = ["dep:smollm-engine"]
 llama-cpp = ["gguf", "smollm-engine/llama-cpp"]
 
 [dependencies]
+agent-config.workspace = true
 agent-tools.workspace = true
 smollm-core.workspace = true
 async-trait.workspace = true

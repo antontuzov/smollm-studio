@@ -65,6 +65,7 @@ dependencies = [
 name = "agent-providers"
 version = "0.1.0"
 dependencies = [
+ "agent-config",
  "agent-tools",
  "async-trait",
  "futures",

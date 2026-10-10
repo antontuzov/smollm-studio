@@ -1,13 +1,56 @@
 //! One trait between the agent loop and whatever is answering it.
 //!
-//! The loop asks for a chat completion with tool schemas attached and gets a
-//! stream of events back. Behind that trait: the scripted mock and echo
-//! providers every test here runs against, an adapter onto this repository's
-//! own inference engine for GGUF models, and a client for anything that speaks
-//! the OpenAI wire format — Ollama, LM Studio, vLLM, TGI, `llama-server`, or
-//! the `smoll-serve` endpoint this workspace already ships.
+//! The loop asks for a completion with tool schemas attached and gets back text
+//! plus whatever calls it recognises — one answer per step, so a step can be
+//! retried, timed out and logged as a unit.
+//!
+//! Behind the trait today sit the scripted mock and the echo provider, which is
+//! what every test in this workspace runs against. The GGUF adapter onto this
+//! repository's engine layer and the OpenAI-compatible HTTP client for Ollama,
+//! LM Studio, vLLM, TGI, `llama-server` and this repo's own `smoll serve` are
+//! the next step; asking for one before it is built returns
+//! [`ProviderError::not_supported`] rather than a silent fallback to the mock,
+//! because an agent that quietly answers from a script in place of your model is
+//! worse than one that stops.
 //!
 //! Small models are the design centre, not an afterthought: tool calls are
 //! parsed from native function calls, fenced JSON and plain text in that order,
-//! malformed output gets one repair attempt, and a provider that cannot do tool
-//! calling is not an error — it degrades the run into suggestion mode.
+//! a malformed answer gets one repair attempt, and a provider that cannot do
+//! tool calling is not an error — it degrades the run into suggestion mode.
+//!
+//! ```
+//! use agent_providers::{tool_calls, CompletionRequest, MockProvider, Provider, Reply, ToolSchema};
+//! use serde_json::json;
+//! use smollm_core::chat::{chat_message, Role};
+//!
+//! let provider = MockProvider::scripted([Reply::call("list_files", json!({"dir": "src"}))]);
+//! let mut request = CompletionRequest::new(vec![chat_message(Role::User, "what is in src?")]);
+//! request.tools = vec![ToolSchema::new(
+//!     "list_files",
+//!     "List a directory",
+//!     json!({"type": "object", "properties": {"dir": {"type": "string"}}}),
+//! )];
+//!
+//! let runtime = tokio::runtime::Runtime::new().expect("a test runtime");
+//! let answer = runtime.block_on(provider.complete(&request)).expect("a scripted answer");
+//! assert_eq!(answer.calls.len(), 1);
+//! assert_eq!(answer.calls[0].name, "list_files");
+//!
+//! // The same reading works on raw text, which is how a prose answer from a
+//! // model without tool calling still becomes a call.
+//! assert_eq!(tool_calls(r#"{ "tool": "list_files", "dir": "src" }"#, &|_| true).len(), 1);
+//! ```
+
+mod build;
+mod echo;
+mod error;
+mod mock;
+mod parse;
+mod provider;
+
+pub use build::{build, capabilities_of};
+pub use echo::EchoProvider;
+pub use error::{ProviderError, ProviderResult};
+pub use mock::{MockProvider, Reply, UNSCRIPTED};
+pub use parse::{repair, tool_calls, tool_calls_among};
+pub use provider::{Capabilities, Completion, CompletionRequest, Provider, StopReason, ToolSchema};
