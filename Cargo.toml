@@ -1,12 +1,23 @@
 [workspace]
 resolver = "2"
 members = [
+  # The model layer: discovery, verified downloads, hardware, engines, server.
   "crates/smollm-core",
   "crates/smollm-engine",
   "crates/smollm-models",
   "crates/smollm-hardware",
   "crates/smollm-server",
   "crates/smollm-cli",
+  # The agent: a repo-aware coding agent that drives those models. New code
+  # lives here; the crates above are consumed, not rewritten.
+  "crates/agent-config",
+  "crates/agent-sandbox",
+  "crates/agent-tools",
+  "crates/agent-repo",
+  "crates/agent-providers",
+  "crates/agent-core",
+  "crates/agent-cli",
+  # Frozen: keeps building and passing its gates, gets no new features.
   "desktop/src-tauri",
 ]
 
@@ -27,6 +38,13 @@ smollm-models = { path = "crates/smollm-models" }
 smollm-hardware = { path = "crates/smollm-hardware" }
 smollm-server = { path = "crates/smollm-server" }
 
+agent-config = { path = "crates/agent-config" }
+agent-sandbox = { path = "crates/agent-sandbox" }
+agent-tools = { path = "crates/agent-tools" }
+agent-repo = { path = "crates/agent-repo" }
+agent-providers = { path = "crates/agent-providers" }
+agent-core = { path = "crates/agent-core" }
+
 # --- async / runtime ---
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["rt"] }
@@ -37,6 +55,7 @@ async-trait = "0.1"
 # --- serialization ---
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+toml = "0.8"
 
 # --- errors / logging ---
 thiserror = "2"
@@ -52,6 +71,7 @@ reqwest = { version = "0.12", default-features = false, features = [
 ] }
 axum = { version = "0.8", features = ["tokio", "macros"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
+url = "2"
 
 # --- system / files ---
 sysinfo = "0.33"
@@ -59,6 +79,12 @@ fs2 = "0.4"
 sha2 = "0.10"
 hex = "0.4"
 walkdir = "2"
+# Directory walking that honours .gitignore, which is the whole point of a
+# repository index: target/ and node_modules are context noise, not context.
+ignore = "0.4"
+globset = "0.4"
+similar = "2"
+cargo_metadata = "0.18"
 
 # --- credentials ---
 # The platform's own store, and nothing else: no store feature is enabled here

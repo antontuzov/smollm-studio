@@ -1,0 +1,24 @@
+[package]
+name = "agent-repo"
+description = "Repository indexing: ignore rules, Cargo detection, repo map, relevance scoring, diffs and patches"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+agent-sandbox.workspace = true
+smollm-core.workspace = true
+cargo_metadata.workspace = true
+globset.workspace = true
+ignore.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+similar.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+walkdir.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

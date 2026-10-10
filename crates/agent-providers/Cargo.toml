@@ -1,0 +1,39 @@
+[package]
+name = "agent-providers"
+description = "Provider abstraction over local engines, OpenAI-compatible servers and scripted test models"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["mock"]
+# Scripted and echo providers: always available, no dependencies, and what
+# every test in this workspace runs against.
+mock = []
+# Any server that speaks the OpenAI wire format: Ollama, LM Studio, vLLM, TGI,
+# llama-server, or smollm-server from this repository.
+openai-compatible = ["dep:reqwest", "dep:url"]
+# A model loaded through this repo's engine layer. Without `llama-cpp` the
+# engine is the mock one, which is enough to exercise the adapter.
+gguf = ["dep:smollm-engine"]
+llama-cpp = ["gguf", "smollm-engine/llama-cpp"]
+
+[dependencies]
+agent-tools.workspace = true
+smollm-core.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+reqwest = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+smollm-engine = { workspace = true, optional = true }
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+url = { workspace = true, optional = true }
+uuid = { workspace = true, features = ["serde"] }
+
+[dev-dependencies]
+tempfile = "3"

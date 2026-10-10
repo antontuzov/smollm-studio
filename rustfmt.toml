@@ -1,0 +1,4 @@
+# Every value here is rustfmt's default, written down so a contributor's editor
+# and CI cannot disagree, and nothing is pinned that needs a nightly toolchain.
+edition = "2021"
+max_width = 100

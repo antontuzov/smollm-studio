@@ -1,0 +1,35 @@
+[package]
+name = "agent-cli"
+description = "The smoll command line interface for the SmolLLM coding agent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "smoll"
+path = "src/main.rs"
+
+[features]
+default = ["mock-provider"]
+mock-provider = ["agent-providers/mock"]
+openai-compatible = ["agent-providers/openai-compatible"]
+gguf = ["agent-providers/gguf"]
+llama-cpp = ["agent-providers/llama-cpp"]
+
+[dependencies]
+agent-config.workspace = true
+agent-core.workspace = true
+agent-providers.workspace = true
+agent-repo.workspace = true
+agent-sandbox.workspace = true
+agent-tools.workspace = true
+smollm-core.workspace = true
+smollm-hardware.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
