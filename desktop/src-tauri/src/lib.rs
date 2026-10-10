@@ -64,6 +64,11 @@ pub fn run() {
         // Native open/save panels: a transcript export and a model import both
         // need a real filesystem path, which the webview will not hand out.
         .plugin(tauri_plugin_dialog::init())
+        // Restores the frame the user left: size, position, maximised state. It
+        // has to be registered before the window exists, which is what a plugin
+        // on the builder does, so the first paint is already at the right size
+        // rather than 1280x820 for a frame.
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .setup(move |app| {
             let handle = app.handle().clone();
             let (bootstrapped, receiver) = AppState::bootstrap(settings, logs)?;

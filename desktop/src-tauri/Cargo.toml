@@ -22,6 +22,7 @@ llama-cpp = ["smollm-engine/llama-cpp"]
 [dependencies]
 tauri.workspace = true
 tauri-plugin-dialog.workspace = true
+tauri-plugin-window-state.workspace = true
 smollm-core.workspace = true
 smollm-engine = { workspace = true, features = ["mock"] }
 smollm-models.workspace = true

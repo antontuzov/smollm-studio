@@ -84,6 +84,9 @@ tauri-build = { version = "2", features = [] }
 # Native open/save panels. Importing a model and exporting a transcript both
 # need a real path, and the webview will not hand one out without this.
 tauri-plugin-dialog = { version = "2" }
+# The window comes back the size and place the user left it, which a desktop app
+# is expected to do and this one did not.
+tauri-plugin-window-state = { version = "2" }
 
 [profile.release]
 opt-level = 3
