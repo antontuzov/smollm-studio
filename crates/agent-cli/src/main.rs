@@ -19,7 +19,10 @@ use clap::{Parser, Subcommand};
     long_about = "smoll reads your repository, plans a change, proposes a diff, asks before it \
                   writes, and runs the project's own tests to check itself. It answers from a \
                   model you run locally; nothing about your code leaves the machine unless you \
-                  configure a remote provider."
+                  configure a remote provider.\n\n\
+                  Build status: the loop is still being wired. Today `init` and `config` work, \
+                  `task`, `tools` and `doctor` say they are not wired yet, and the only \
+                  providers that answer are the scripted mock and the echo inspector."
 )]
 struct Cli {
     /// Run as if started in DIR, which is how a script points the agent at a
@@ -121,8 +124,9 @@ fn cmd_init(cwd: &Path, json: bool, force: bool) -> Result<(), String> {
     println!("  workspace only {}", loaded.config.privacy.workspace_only);
     println!();
     println!(
-        "The starter answers from the mock provider, so `smoll task \"...\"` works before you \
-         have a model. Point it at a real one by editing [providers] in {}.",
+        "The starter answers from the mock provider, so this configuration resolves with no \
+         model on disk. `smoll task` is not wired to the loop yet; point it at a real model by \
+         editing [providers] in {}.",
         path.display()
     );
     print_warnings(&loaded.warnings);
