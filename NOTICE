@@ -1,0 +1,63 @@
+# Third-party notices
+
+SmolLLM Studio is MIT licensed — see [LICENSE](LICENSE). That licence covers the
+code in this repository. It does not cover the things this repository builds
+against or hands to you, and this file names them.
+
+## llama.cpp
+
+Real inference comes from [llama.cpp](https://github.com/ggml-org/llama.cpp)
+by Georgi Gerganov and contributors, MIT licensed. No llama.cpp source is
+committed here: enabling the `llama-cpp` feature pulls the
+[`llama-cpp-2`](https://crates.io/crates/llama-cpp-2) bindings (also MIT) from
+crates.io, and those bindings fetch and compile the C++ library as part of the
+build, with Metal back ends added by that library's own build system where the
+toolchain supports them. Every shipped CI build uses the `mock` engine instead,
+so a released binary contains llama.cpp only if you built it yourself with
+`--features llama-cpp`.
+
+The GGUF format llama.cpp defines is what this app reads; model metadata parsing
+and the tensor-accurate memory estimates are built on that format, not on llama
+.cpp's own headers being available at write time.
+
+## Inter
+
+The UI ships two self-hosted font files,
+`desktop/src/assets/fonts/inter-latin-wght.woff2` and `inter-latin-ext-wght.woff2`,
+copied from the `@fontsource-variable/inter` package
+([Inter Project Authors](https://github.com/rsms/inter), Copyright 2016) under
+the SIL Open Font License 1.1.
+The full licence text is committed next to the fonts as
+[INTER-LICENSE.txt](desktop/src/assets/fonts/INTER-LICENSE.txt) and must stay
+there. Only the `latin` and `latin-ext` subsets of the variable weight axis are
+vendored; no glyph data is modified, and the files are served from the app's own
+origin rather than a font CDN, which is also why the Content-Security-Policy can
+restrict `font-src` to `'self'`.
+
+## The Rust and npm dependency tree
+
+Tauri 2 and its plugins (`dialog`, `window-state`), Axum, Tokio, reqwest,
+serde, tracing, sysinfo, `keyring`, React, TanStack Query, Radix UI and
+Tailwind are used under their own licences, the large majority MIT or
+Apache-2.0. Exact versions are pinned in `Cargo.lock` and
+`desktop/pnpm-lock.yaml`, so the set a given build used is reproducible from
+that build's source. None of them phone home; the app's own outbound requests
+are documented in [docs/privacy.md](docs/privacy.md).
+
+## Model files
+
+This repository publishes no weights. The catalog points at files hosted by
+[Hugging Face](https://huggingface.co), and each model arrives under its own
+licence — `apache-2.0`, MIT, Llama, Gemma and other community terms all appear
+in the catalog. Those licences are the reason the Models page shows a licence on
+every entry, and they are the terms that govern what you may do with a model;
+SmolLLM Studio's MIT licence says nothing about them. Read the licence on the
+model's own page before you distribute an output or a fine-tune built on it.
+
+## Names
+
+"SmolLM", "SmolLM2" and "Hugging Face" are marks of Hugging Face Inc.; this app
+is not affiliated with or endorsed by them. "llama.cpp" and "GGUF" are the names
+of the project and format they come from. The brand mark in
+`assets/brand/` is original to this project and drawn by
+[scripts/render_logo_light.py](scripts/render_logo_light.py).

@@ -215,9 +215,78 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Checked against `--features llama-cpp` on an Apple M1 (8 cores): seed 123 repeated one
   answer byte for byte and seed 999 did not, `--stop ","` truncated at the first comma,
   and `--threads 64` warned that this machine runs 8 at once.
+- **A Content-Security-Policy on the webview.** `app.security.csp` was `null`, which
+  tells WebKit that a script in this window may talk to any host it likes. It is now
+  `default-src 'self'` with `script-src`, `style-src` and `font-src` confined to the
+  app's own origin, `connect-src` limited to that origin plus the local IPC bridge,
+  and `object-src`, `frame-src` and `form-action` none. It could be that strict
+  because the frontend was already honest about its sources: every script, style,
+  font and image is bundled by Vite from `desktop/`, `desktop/src` contains not one
+  remote URL, and the built `dist/` turned out to hold no `data:` image, no inline
+  `<style>` element and no `style` attribute in the HTML shell — so `style-src 'self'`
+  costs nothing, React writing a progress bar's width through the CSSOM being outside
+  what CSP governs. Verified against the artifact the policy actually applies to:
+  `pnpm tauri build --no-bundle` then launching it, where `hardware detected`,
+  `settings saved` and `opened model folder` in the log are each an `invoke`, meaning
+  script execution, the IPC bridge and the settings round-trip all still work under
+  the policy. (`tauri dev` serves from `devUrl` and injects no CSP, so this can only
+  be checked on a release build.)
+- **The capability list checked against what the webview actually calls.** The
+  audit's result is a file that did not need changing: `core:default` covers
+  `invoke` and the event listeners, `dialog:default` covers the import, export and
+  folder pickers, and that is the complete set of Tauri APIs `desktop/src` imports.
+  What the audit *rejected* is worth writing down — `window-state:default` was
+  granted while wiring the plugin below, then taken away again, because nothing in
+  the UI calls a plugin JS API: a window's state is restored and saved from Rust,
+  where the ACL does not apply, and a permission no code path uses is attack surface
+  rather than insurance.
+- **The window comes back the way you left it.** `tauri-plugin-window-state` is
+  registered on the builder, which is what puts restore *before* the first frame
+  instead of opening at 1280×820 and jumping; size, position and maximised state
+  land in `.window-state.json` in the app's own config folder
+  (`~/Library/Application Support/studio.smollm.app` on macOS), separate from the
+  data folder because it is app-shell state rather than user content. The plugin
+  writes it on a clean exit, so a test instance killed with `SIGTERM` leaves no
+  file — worth knowing before concluding nothing was saved.
+- **First-run onboarding, the screen `onboardingComplete` always named.** The flag
+  was saved by Settings and read by nothing, because no such screen existed. It is
+  three steps — what stays on this machine, what this machine can run, pick a first
+  model — and each one says something checkable: the local guarantees, then the
+  doctor's real headline with cores, RAM and backend recommendation, then the three
+  smallest catalog entries the doctor would actually recommend, each downloadable
+  from there straight to the Models page. A machine that cannot be measured shows
+  that fact instead of a invented number. Closing the dialog sets the flag like
+  finishing it does, because dismissal is itself an answer. Checked in the release
+  build on a fresh data folder: the dialog appeared over Home, the machine step
+  reported 16 GB and 8 cores, and `settings.json` afterwards read
+  `"onboardingComplete": true`.
+- **A white-background brand mark, and the README leads with it.** GitHub renders a
+  README on white, where the dark app tile disappears into the page, so
+  `scripts/render_logo_light.py` draws the same eight-lobed mark as a violet-to-cyan
+  gradient on a white rounded card with a hairline border. It is a parametric
+  renderer committed next to its output, not a one-off export: the silhouette,
+  gradient and halo are numbers in the script, so the mark can be redrawn at any size
+  without a design tool. The dark master and the generated `.icns`/`.ico` stay as they
+  were — a white tile is washed out in a dark Dock.
+- **A security policy, a privacy policy and third-party notices.** `SECURITY.md`
+  states what this app protects and, in at least as much space, what it does not: an
+  unauthenticated loopback API, untrusted model output, plaintext transcripts and
+  logs, third-party weights, and releases that are still unsigned and not
+  notarised. `docs/privacy.md` puts the "no telemetry" claim where such a claim belongs
+  — the two request types the app makes and what the registry sees from them, every
+  file it writes with a table of paths, and how to get all of it off the machine.
+  `NOTICE` names llama.cpp and the bindings that fetch it, Inter's SIL Open Font
+  Licence, the dependency tree pinned in the lockfiles, and the fact that model
+  weights travel under licences this project has no power to grant. The README links
+  all three.
 
 ### Fixed
 
+- **The README rendered three broken image icons on GitHub.** It carried
+  `<img>` tags for screenshots that are deliberately not committed, with a note
+  underneath saying the tags were broken — honest, but the top of the repository
+  page looked like a failed build. The note now says the same thing without the
+  dead tags, and points at the file that specifies the five captures to take.
 - **Settings → "Chat defaults" saved sliders that nothing read.** `Settings.sampling`
   was validated on save, rendered on the page and then consumed by no code path in
   Rust or the UI, so a temperature — or a seed, once the seed field existed — tuned
