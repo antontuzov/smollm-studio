@@ -18,6 +18,7 @@
 //! that owns the service when the state file is missing or stale, which is the same thing the
 //! desktop app does at its own launch.
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -848,15 +849,24 @@ pub struct Write<'a> {
 /// is known: at the refusal, or at the call's own success or failure. The pair is what lets a run on
 /// this route have rows, a pill that moves, and a review that says what changed — see
 /// [`project_permissions`] for why the asking, rather than an allow rule, is the confinement.
-pub async fn stream_turn(
+///
+/// The answer is a future rather than a value because it can be a prompt the user answers: a call the
+/// dial leaves to the person running it waits for a press, and this stream is read on the same event
+/// loop that has to deliver it. A synchronous gate here would park the loop on its own answer and
+/// deadlock the run at the first prompt. The request is handed over by value for the same reason —
+/// the future outlives the call that built it.
+pub async fn stream_turn<Fut>(
     service: &Service,
     session: &str,
     text: &str,
     stop: &AtomicBool,
     mut on_delta: impl FnMut(&[ReplyDelta]) -> StreamControl,
-    mut gate: impl FnMut(&Request) -> Verdict,
+    mut gate: impl FnMut(Request) -> Fut,
     mut on_write: impl FnMut(&Write),
-) -> Result<Reply, String> {
+) -> Result<Reply, String>
+where
+    Fut: Future<Output = Verdict> + Send,
+{
     let client = service.client();
     let mut events = service
         .get(&client, "/api/event")
@@ -1031,7 +1041,7 @@ pub async fn stream_turn(
                     let Some(request) = permission_request(&event) else {
                         continue;
                     };
-                    let verdict = gate(&request);
+                    let verdict = gate(request.clone()).await;
                     reply(service, session, &request.id, &verdict).await?;
                     match verdict {
                         Verdict::Allow => {

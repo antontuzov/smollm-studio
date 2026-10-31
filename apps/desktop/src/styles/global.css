@@ -1856,6 +1856,108 @@ select.field-input {
   border-radius: var(--radius-md);
   background: var(--bg-sunken);
 }
+/* The card a run waits behind. It borrows the refusal's shape — the same sunken ground, the same rule
+ * down the left — and takes the warning colour rather than the danger, because nothing has gone wrong
+ * yet: the run is stopped, and the stop is the point. */
+.approval-card {
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--warning);
+  border-radius: var(--radius-md);
+  background: var(--bg-sunken);
+  box-shadow: var(--shadow-raised);
+  animation: surface-enter var(--dur-steady) var(--ease-standard);
+}
+.approval-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.approval-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--size-fine);
+}
+.approval-class {
+  color: var(--text-muted);
+  font-size: var(--size-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+/* The question itself, at the size the answer is written at: this line is the one a person has to read
+ * before pressing, so it is not set as a caption. */
+.approval-headline {
+  margin: var(--space-2) 0 0;
+  color: var(--text-strong);
+  font-size: var(--size-ui);
+}
+.approval-command {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-strong);
+  font-family: var(--font-family-code);
+  font-size: var(--size-quiet);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.approval-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+.approval-count {
+  color: var(--text-muted);
+  font-size: var(--size-fine);
+  font-variant-numeric: tabular-nums;
+}
+/* The last ten seconds take the warning ink, so the countdown is readable as a countdown rather than as
+ * a caption that happens to change. */
+.approval-count--short {
+  color: var(--warning);
+}
+.approval-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.approval-allow {
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  padding: var(--space-1) var(--space-4);
+  color: var(--accent-contrast);
+  font-size: var(--size-ui);
+  font-weight: 500;
+  transition: opacity var(--dur-quick) var(--ease-standard);
+}
+.approval-allow:hover {
+  opacity: 0.9;
+}
+.approval-deny {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  padding: var(--space-1) var(--space-3);
+  color: var(--text-strong);
+  font-size: var(--size-ui);
+  transition: background var(--dur-quick) var(--ease-standard);
+}
+.approval-deny:hover {
+  background: var(--bg-hover);
+}
+.approval-allow:disabled,
+.approval-deny:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 .answer blockquote {
   padding-left: var(--space-3);
   border-left: 2px solid var(--border-strong);

@@ -7,6 +7,7 @@
 
 mod agent;
 mod appearance;
+mod approve;
 mod brand;
 mod chat;
 mod clipboard;
@@ -301,6 +302,9 @@ pub fn run() {
         // The page calls waiting for the window's browser panel to answer. A tool thread parks on its
         // own channel; `preview::page_reply` is what sends. See `preview`.
         .manage(preview::PageBridge::default())
+        // The calls waiting for the window to answer their approval prompt. A tool thread parks on its
+        // own channel; `approve::resolve_approval` is what sends. See `approve`.
+        .manage(approve::ApprovalBridge::default())
         // One process owns the engine, the conversation and the saved key, so a second launch hands
         // over and exits; the window already open comes forward instead. This plugin has to be
         // registered before the others — it runs their setup only after claiming the instance.
@@ -379,6 +383,8 @@ pub fn run() {
             preview::preview_entry,
             // The window's answer to one page operation the run asked for — see `preview`.
             preview::page_reply,
+            // The window's answer to one approval prompt: the press, sent to the call that asked.
+            approve::resolve_approval,
             // What the page draws, as a PNG kept in the app's own folder. The window sends the panel's
             // rectangle because only the layout knows where the frame ended up.
             preview::page_capture,

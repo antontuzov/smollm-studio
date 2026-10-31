@@ -104,6 +104,16 @@ export type FontStyle = "sans" | "serif" | "mono";
 export type ContentWidth = "standard" | "wide" | "full";
 export type FileIconSet = "qoder" | "seti" | "vscode" | "none";
 export type ApprovalMode = "auto_approve" | "ask_always" | "plan_only" | "custom";
+
+/**
+ * `freecode_core::ApprovalDecision`: what settled one call.
+ *
+ * The two timeouts and denials are separate members because they are separate facts to say out loud:
+ * a call the user refused and a call nobody answered in time must never read as the same refusal, and
+ * `timedOut` is never consent. Mirrors the Rust enum's camelCase wire spelling.
+ */
+export type ApprovalDecision =
+  "autoAllowed" | "userApproved" | "userDenied" | "timedOut" | "blockedByPolicy";
 export type ReasoningEffort = "auto" | "low" | "medium" | "xhigh" | "none";
 /** `automatic` follows the OS default; `named` pins a specific microphone. */
 export type InputDevice = "automatic" | { named: string };
@@ -341,6 +351,25 @@ export type AgentEvent =
   /** The run's ledger after one more write landed on it, so the "+N −M" pill moves while the run is
    * still going rather than arriving only once it ends. */
   | { type: "diffStaged"; diff: HostDiff }
+  /** A call the approval policy would not settle on its own. The run is parked on this until the card
+   * under the transcript is answered, and `timeoutMs` is how long it will wait: the host sends its own
+   * patience rather than letting the window guess one, so the countdown the user reads is the number
+   * that decides. A round's calls go out together, so two of these can be open at once — which is why
+   * an answer has to name the `callId` it is about.
+   * `command` is the exact argv when the call runs one: the headline says what is about to happen in
+   * the interface's language, and this is the line behind it, unedited. */
+  | {
+      type: "approvalRequested";
+      callId: string;
+      toolId: string;
+      headline: string;
+      permission: PermissionClass;
+      timeoutMs: number;
+      command?: string | null;
+    }
+  /** What became of a prompt: the press, its time running out, or a stop that settled it. The host
+   * closes the card with this rather than the window deciding on its own when a prompt is over. */
+  | { type: "approvalResolved"; callId: string; decision: ApprovalDecision }
   | { type: "engineBlocked"; info: BlockedInfo }
   | { type: "warning"; code: string; params: NoticeParams }
   /** `totalDiff` is the "+N −M" pill's closing total: null when the run wrote nothing, which is the
@@ -957,6 +986,14 @@ export const ipc = {
   restoreTrashed: (name: string) => invoke<SessionSummary>("restore_trashed", { name }),
   /** The press that means it: take a trashed conversation's file off the machine. */
   purgeTrashed: (name: string) => invoke<void>("purge_trashed", { name }),
+  /**
+   * Answer one approval prompt and end the wait it is parking a run on. The host has exactly one waiter
+   * per `callId` — the same id the `approvalRequested` event names and the call's own row is keyed by —
+   * and an answer for a call it already timed out on is dropped rather than kept as a pending verdict.
+   * This is the only way a run moves again once a card is on screen.
+   */
+  resolveApproval: (callId: string, approved: boolean) =>
+    invoke<void>("resolve_approval", { callId, approved }),
   /** Stop the reply that is streaming. The next message opens a fresh turn on the same route. */
   chatStop: () => invoke<void>("chat_stop"),
   /**

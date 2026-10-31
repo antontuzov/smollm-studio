@@ -251,7 +251,7 @@ mod tests {
 
     /// The Terminal switch is the shell's consent the way the Privacy switch is the web calls': with
     /// it on, the default dial runs a command and the three runners built on the same consent; in Ask
-    /// mode they still have to ask, which this build cannot show, so the page says the truth for each.
+    /// mode they stop and ask the user, which is what the page's "ask" now means in fact.
     #[test]
     fn the_terminal_switch_is_what_moves_the_shell_from_blocked_to_auto() {
         let settings = Settings {

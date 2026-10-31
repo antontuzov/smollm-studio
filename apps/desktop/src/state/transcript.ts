@@ -764,6 +764,13 @@ function reduce(rows: Row[], event: AgentEvent): Row[] {
       // A running command's bytes are the terminal panel's, not a row's: the row already says what
       // started and how it ended, and the transcript is not the place to print a build log.
       return rows;
+    case "approvalRequested":
+    case "approvalResolved":
+      // A prompt is store state rather than a row, and it lives in its own store: the card belongs
+      // beside the composer, where a scrolled transcript cannot hide the question a run is parked on.
+      // The call itself is already a row — the host opens it before the wait begins — so a second line
+      // here would say the same thing twice.
+      return rows;
     case "runFinished":
       return onOpenTurn(rows, (turn) => ({
         ...turn,

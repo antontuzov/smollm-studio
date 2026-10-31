@@ -16,6 +16,7 @@ import { translate, type Locale } from "./i18n";
 import { ipc } from "./lib/ipc";
 import { useShortcuts } from "./lib/shortcuts";
 import { useAppearance } from "./state/appearance";
+import { useApproval } from "./state/approval";
 import { useChat } from "./state/chat";
 import { currentView, useNav } from "./state/nav";
 import { useOnboarding } from "./state/onboarding";
@@ -146,6 +147,7 @@ export default function App() {
       query("settings") !== null ||
       query("extensions") !== null ||
       query("ask") !== null ||
+      query("approve") !== null ||
       query("preview") !== null ||
       query("pagecheck") !== null
     )
@@ -230,6 +232,24 @@ export default function App() {
       if (command) await useShell.getState().send(command);
     })();
   }, [shellLine]);
+
+  // `?approve=<ms>` presses the card's Allow that many milliseconds after the first approval prompt
+  // lands. The native window takes no injected clicks, so this is the dev-only press of the control —
+  // and the only way a capture can show that a prompt the run waited on is answered and the write it
+  // guarded then happens. A large value is the other half: the card sits on screen while the run is
+  // parked behind it, which is the state a screenshot of this feature needs.
+  const approveAfter = query("approve");
+  const waiting = useApproval((s) => s.prompts.length > 0);
+  const pressed = useRef(false);
+  useEffect(() => {
+    if (approveAfter === null || pressed.current) return;
+    const prompt = useApproval.getState().prompts[0];
+    if (!prompt) return;
+    pressed.current = true;
+    const ms = Math.max(0, Number(approveAfter) || 0);
+    const id = window.setTimeout(() => void useApproval.getState().answer(prompt.callId, true), ms);
+    return () => window.clearTimeout(id);
+  }, [approveAfter, waiting]);
 
   // `?reopen=1` opens the newest filed conversation once the list arrives — the same call the
   // sidebar's row makes, and the only way that row's behavior gets verified rather than assumed,

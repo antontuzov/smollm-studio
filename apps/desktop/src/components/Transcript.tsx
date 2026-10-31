@@ -18,6 +18,7 @@ import {
   type Turn,
 } from "../state/transcript";
 import { Answer } from "./Answer";
+import { Approvals } from "./Approval";
 import { Composer } from "./Composer";
 import { ExternalLink } from "./ExternalLink";
 import { Icon } from "./icons";
@@ -887,6 +888,7 @@ export function Transcript({
         )}
       </div>
 
+      <Approvals locale={locale} />
       <Composer locale={locale} onPickModel={onPickModel} />
     </main>
   );

@@ -3,6 +3,7 @@
 import { create } from "zustand";
 
 import { ipc } from "../lib/ipc";
+import { useApproval } from "./approval";
 import { fileable, useSessions } from "./sessions";
 import { useTerminal } from "./terminal";
 import { useTranscript } from "./transcript";
@@ -115,5 +116,8 @@ export function connectAgentEvents(): Promise<() => void> {
     // The terminal is a second view of the same stream: the row that opened a command and the output
     // it printed are the same event sequence, applied to the two stores that draw it.
     useTerminal.getState().apply(event);
+    // And the approval prompts are a third: the run parks on the answer, so the card has to open on the
+    // same event that puts the call's row on screen and close on the one that settles it.
+    useApproval.getState().apply(event);
   });
 }

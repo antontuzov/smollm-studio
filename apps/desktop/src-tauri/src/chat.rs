@@ -15,6 +15,7 @@
 //!     text by construction; a remote provider takes the image on its request.
 
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -29,6 +30,7 @@ use tauri_plugin_dialog::DialogExt;
 use freecode_config::{
     ApprovalMode, ModelSource, ReasoningEffort, Settings, DEFAULT_SYSTEM_PROMPT,
 };
+use freecode_core::approvals::ApprovalRequest;
 use freecode_core::events::{AgentEvent, NoticeCode, RunReport, ToolOutcome};
 use freecode_core::transcript::{DiffStat, StepStatus, TranscriptStep};
 use freecode_llama::{ChatRequest, Message, RemoteAccess, Reply, ReplyDelta, StreamControl};
@@ -572,14 +574,21 @@ struct Run<'a> {
 /// service rather than through [`agent`]: the service asks before it writes, this app answers, and what
 /// became of the write comes back as a row. No other route asks — every call it makes already goes
 /// through [`agent`]'s sandbox and gets its row there.
-async fn stream_round(
+///
+/// The answer is a future because it can be a prompt: a write the dial leaves to the user waits for a
+/// press, and this route's stream is read on the loop that has to deliver it. See
+/// [`opencode::stream_turn`] for the half of that the service side owns.
+async fn stream_round<Fut>(
     answer: &Answer,
     request: &ChatRequest,
     stop: &AtomicBool,
     on_delta: impl FnMut(&[ReplyDelta]) -> StreamControl,
-    gate: impl FnMut(&opencode::Request) -> opencode::Verdict,
+    gate: impl FnMut(opencode::Request) -> Fut,
     on_write: impl FnMut(&opencode::Write),
-) -> Result<Reply, String> {
+) -> Result<Reply, String>
+where
+    Fut: Future<Output = opencode::Verdict> + Send,
+{
     match answer {
         Answer::Remote(turn) => {
             freecode_llama::stream_remote_chat(&remote_access(turn), request, on_delta)
@@ -663,6 +672,17 @@ fn opencode_prompt(request: &ChatRequest, turn: &OpenCodeTurn) -> Result<String,
     Ok(prompt)
 }
 
+/// What a service write's policy check produced: the answer the service gets straight away, or the
+/// prompt the window has to answer before there is an answer to give it.
+///
+/// The two are separated because the second one takes as long as a person needs, and the wait cannot
+/// hold the ledger's lock — the same event loop that carries the press is the one reading the
+/// service's stream. A caller takes the prompt out from under the lock, lets it go, and answers after.
+enum Gated {
+    Settled(opencode::Verdict),
+    Prompt(ApprovalRequest),
+}
+
 /// What this app does with a write the OpenCode service asks about: the answer it sends back, and the
 /// row it opens for it.
 ///
@@ -733,52 +753,103 @@ impl ServiceWrites {
 
     /// Answer one ask, in the words the service hands back to the model, and open its row.
     ///
-    /// Two things can refuse: the run's own shape, read from the settings it started under rather than
-    /// from the session, which outlives the dial moving; and the sandbox, which bounds every path the
-    /// call names rather than the first one, because a write that touches two files lands outside on
-    /// either of them.
-    fn ask(&mut self, app: &AppHandle, request: &opencode::Request) -> opencode::Verdict {
-        let verdict = if !self.may_write {
+    /// Three things can settle it before the user is involved: the run's own shape, read from the
+    /// settings it started under rather than from the session, which outlives the dial moving; the
+    /// sandbox, which bounds every path the call names rather than the first one, because a write that
+    /// touches two files lands outside on either of them; and the approval policy, whose dial decides
+    /// whether a write the folder allows still stops for a person.
+    ///
+    /// The row opens whatever the answer is, so a call that waits on a prompt is a row the run is
+    /// holding rather than a silence in the transcript.
+    fn ask(&mut self, app: &AppHandle, request: &opencode::Request, settings: &Settings) -> Gated {
+        let settled = if !self.may_write {
             opencode::Verdict::Refuse(self.refusal.to_string())
         } else {
             match &self.policy {
                 Err(why) => opencode::Verdict::Refuse(why.clone()),
-                Ok(policy) => self
+                Ok(policy) => match self
                     .targets(request)
                     .iter()
                     .find_map(|path| policy.resolve_path(path, Access::Write).err())
-                    .map(|violation| opencode::Verdict::Refuse(violation.to_string()))
-                    .unwrap_or(opencode::Verdict::Allow),
+                {
+                    Some(violation) => opencode::Verdict::Refuse(violation.to_string()),
+                    // Inside the folder, so the dial gets its say: under Ask every change is the
+                    // user's to approve, exactly as it is on the route that runs its own tool loop.
+                    None => match self.gated(request, settings, policy) {
+                        Ok(None) => opencode::Verdict::Allow,
+                        Ok(Some(prompt)) => {
+                            self.open_row(app, request);
+                            return Gated::Prompt(prompt);
+                        }
+                        Err(reason) => opencode::Verdict::Refuse(reason),
+                    },
+                },
             }
         };
         // Nothing can land without a folder to land it in, so there is no row to open and no write to
         // report: the answer goes back to the model, and the model says what it could not do.
         if self.policy.is_err() {
-            return verdict;
+            return Gated::Settled(settled);
         }
+        self.open_row(app, request);
+        Gated::Settled(settled)
+    }
+
+    /// The dial's own answer for this write, read through the same function the local loop uses. The
+    /// tool name and the path come from [`Self::subject`], so the prompt the user reads names the very
+    /// file the row will name.
+    fn gated(
+        &self,
+        request: &opencode::Request,
+        settings: &Settings,
+        policy: &SandboxPolicy,
+    ) -> Result<Option<ApprovalRequest>, String> {
+        let (tool, path) = self.subject(request);
+        agent::gated(
+            tool,
+            &json!({ "path": path }),
+            &request.id,
+            settings,
+            policy,
+        )
+    }
+
+    /// The row a service write gets, put on the ledger and in front of the user before anything waits.
+    fn open_row(&mut self, app: &AppHandle, request: &opencode::Request) {
         let row = self.row_for(request);
         agent::emit(app, AgentEvent::ToolStarted { step: row.clone() });
         self.open.insert(request.id.clone(), row);
-        verdict
+    }
+
+    /// The tool and the file one write reads as, which is what the row, the prompt and the review all
+    /// name it by.
+    ///
+    /// Measured: the service's write tool answers for a new file and a changed one alike, and its action
+    /// says `edit` for both — so the kind, which is what makes a page an artifact the window can open,
+    /// comes from the status of the files it listed. A request whose change list is empty still names
+    /// the path it was asked about, because a prompt about "" is one nobody can decide on.
+    fn subject(&self, request: &opencode::Request) -> (&'static str, String) {
+        let created =
+            !request.changes.is_empty() && request.changes.iter().all(|change| change.is_created());
+        let path = request
+            .changes
+            .first()
+            .map(|change| self.shown(&change.path))
+            .or_else(|| {
+                request
+                    .resources
+                    .first()
+                    .map(|resource| self.shown(resource))
+            })
+            .unwrap_or_default();
+        (if created { "write_file" } else { "edit_file" }, path)
     }
 
     /// The row one write gets: the same shape a local run's write row has, built by the same function,
     /// so Review, the inspector's changed files and the page's open control cannot tell the routes apart.
     fn row_for(&self, request: &opencode::Request) -> TranscriptStep {
-        // Measured: the service's write tool answers for a new file and a changed one alike, and its
-        // action says `edit` for both — so the row's kind, which is what makes a page an artifact the
-        // window can open, comes from the status of the files it listed.
-        let created =
-            !request.changes.is_empty() && request.changes.iter().all(|change| change.is_created());
-        let subject = request
-            .changes
-            .first()
-            .map(|change| self.shown(&change.path))
-            .unwrap_or_default();
-        agent::started_row(
-            if created { "write_file" } else { "edit_file" },
-            &json!({ "path": subject }),
-        )
+        let (tool, path) = self.subject(request);
+        agent::started_row(tool, &json!({ "path": path }))
     }
 
     /// Close the row a write ended, and move the pill when the bytes landed.
@@ -939,9 +1010,35 @@ async fn stream_turn(
     // service that asked while this app was not watching for it, and nothing that cannot be confined
     // to a folder gets let through.
     let gate_cell = Arc::clone(&writer);
-    let gate = move |request: &opencode::Request| match &mut *lock(&gate_cell) {
-        Some(writes) => writes.ask(app, request),
-        None => opencode::Verdict::Refuse(UNCONFINED.to_string()),
+    let gate_host = app.clone();
+    let gate_settings = settings.clone();
+    let gate = move |request: opencode::Request| {
+        // Everything the wait needs is taken by value, so the future the answer returns holds no borrow
+        // of the ledger: the lock is let go before the prompt goes out, and the run's other calls keep
+        // their rows moving while a person reads the card.
+        let cell = Arc::clone(&gate_cell);
+        let host = gate_host.clone();
+        let settings = gate_settings.clone();
+        async move {
+            let gated = {
+                let mut guard = lock(&cell);
+                let Some(writes) = &mut *guard else {
+                    return opencode::Verdict::Refuse(UNCONFINED.to_string());
+                };
+                writes.ask(&host, &request, &settings)
+            };
+            let prompt = match gated {
+                Gated::Settled(verdict) => return verdict,
+                Gated::Prompt(prompt) => prompt,
+            };
+            // The refusals are worded by the same function the loop's own calls use, so a change the
+            // user refused, one nobody answered in time and one the window could not be asked are three
+            // said facts on either route rather than one blank "not allowed".
+            match agent::approved(&prompt, crate::approve::ask_await(&host, &prompt).await) {
+                Ok(()) => opencode::Verdict::Allow,
+                Err(reason) => opencode::Verdict::Refuse(reason),
+            }
+        }
     };
     let tell_cell = Arc::clone(&writer);
     let on_write = move |write: &opencode::Write| {
@@ -1103,9 +1200,13 @@ struct Delegated {
 /// This is the bounded second run the `spawn_subagent` switch pays for: its own history — the parent's
 /// conversation is not replayed into it — its own read-only offer, and [`SUBAGENT_ROUNDS`] requests.
 /// Its tool calls are run against the same sandbox and approval policy as the parent's, so a read the
-/// user's dial would refuse is refused here too. Nothing is emitted to the transcript from this loop:
-/// the one row the user sees is the delegation, and the report is what the parent gets back.
+/// user's dial would refuse is refused here too, and one the dial leaves to the user stops and waits on
+/// the window — on the blocking pool, so the event loop stays free to carry the answer back. Nothing is
+/// emitted to the transcript from this loop: the one row the user sees is the delegation, and the report
+/// is what the parent gets back. A prompt that waits is the exception the parent has to see, so it is
+/// the one thing this loop lets through.
 async fn delegate(
+    app: &AppHandle,
     answer: &Answer,
     settings: &Settings,
     policy: &SandboxPolicy,
@@ -1151,7 +1252,7 @@ async fn delegate(
             // A subagent is offered the read-only seven, so a write on this route is the service's own
             // tool reaching past the offer — and this loop emits no rows, so a change it made would be
             // one nothing reported. Refusing it is the answer that keeps the bargain the parent made.
-            |_| opencode::Verdict::Refuse(SUBAGENT_REFUSAL.to_string()),
+            |_| async { opencode::Verdict::Refuse(SUBAGENT_REFUSAL.to_string()) },
             |_| {},
         )
         .await
@@ -1195,7 +1296,9 @@ async fn delegate(
             let name = call.name.as_str();
             let result = match freecode_tools::find(name) {
                 Some(tool) if freecode_tools::is_executable(name) && tool.is_read_only() => {
-                    match agent::cleared(name, &arguments, &call.id, settings, policy) {
+                    match agent::cleared_on_loop(app, name, &arguments, &call.id, settings, policy)
+                        .await
+                    {
                         Ok(()) => match freecode_tools::execute(name, &arguments, policy) {
                             Ok(done) => {
                                 reads += 1;
@@ -1289,12 +1392,21 @@ async fn run_delegation(
             "this run has already used its one delegation".into(),
         );
     }
-    if let Err(reason) = agent::cleared("spawn_subagent", &arguments, &call.id, settings, policy) {
+    if let Err(reason) = agent::cleared_on_loop(
+        app,
+        "spawn_subagent",
+        &arguments,
+        &call.id,
+        settings,
+        policy,
+    )
+    .await
+    {
         return refuse_delegation(app, &call.id, row, reason);
     }
 
     let mut row = row;
-    match delegate(answer, settings, policy, &task, run).await {
+    match delegate(app, answer, settings, policy, &task, run).await {
         Ok(done) => {
             row.finish(StepStatus::Done);
             let summary = Summary::said(
@@ -1858,6 +1970,10 @@ pub async fn chat_send(
 #[tauri::command]
 pub async fn chat_stop(app: AppHandle) -> Result<(), String> {
     request_stop(&app.state::<ChatState>());
+    // A run parked on an approval prompt cannot see the flag until its wait ends, and the wait is long
+    // by design. Stop settles the questions it left open, so no card goes on counting down for a run
+    // that is over.
+    crate::approve::cancel_pending(&app);
     Ok(())
 }
 

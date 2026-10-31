@@ -39,6 +39,9 @@ pub enum ApprovalMode {
     /// to; ask for destructive calls.
     #[default]
     AutoApprove,
+    /// Everything the other modes settle on their own is put to the window instead: the run waits on
+    /// the prompt until the user answers it or its time is up. Reads are the exception — opening a file
+    /// changes nothing, and a prompt in front of every one of them asks the user to approve a read.
     AskAlways,
     /// The agent may plan and read, but no mutating tool executes.
     PlanOnly,
@@ -88,29 +91,30 @@ impl Approvals {
 
     /// Decide one call without asking the user. Returns `None` when a prompt is required.
     ///
-    /// A network call is the one class the dial does not speak for: the Privacy switch already asked
-    /// the user whether anything may leave the machine, and the approval engine in `freecode-core`
-    /// refuses the call before it ever reaches this function unless that switch is on. Asking a
-    /// second time would be a prompt this build has nothing to answer it with, so the switch's
-    /// answer is used: off means the call was never offered to the model, on means it runs, and
-    /// every lookup that runs stands in the transcript.
+    /// A network call is the one class with a switch in front of it as well as a dial behind it. The
+    /// Privacy switch decides whether anything may leave the machine at all, and the approval engine in
+    /// `freecode-core` refuses the call before it reaches this function unless that switch is on. What
+    /// is left for the dial is the question the switch cannot answer: not whether the run may reach the
+    /// internet, but whether this page is what it is going to read. Auto says yes to each lookup, Ask
+    /// stops at each one, and off means the tool was never offered.
     pub fn decide(&self, tool_id: &str, class: PermissionClass) -> Option<bool> {
         if let Some(explicit) = self.tool_overrides.get(tool_id) {
             return Some(*explicit);
         }
-        // The shell and the project runners are the side effects a switch could stand in for: there is
-        // no prompt in this build to ask with, and the switch says in advance what the prompt would.
-        // They only reach here while the sandbox's own `shell_allowed` is on — the engine refuses a
-        // switched-off shell before the mode is consulted.
+        // The shell and the project runners are the side effects a switch speaks for: the switch is what
+        // lets them run at all, and under Auto or Custom it is also what settles a command without a
+        // prompt. Ask mode still stops at each line — the switch says this run may have a shell, not
+        // that any command in it has been read. They only reach here while the sandbox's own
+        // `shell_allowed` is on; the engine refuses a switched-off shell before the mode is consulted.
         if shell_governed(tool_id) && self.shell_enabled && self.mode != ApprovalMode::AskAlways {
             return Some(matches!(
                 self.mode,
                 ApprovalMode::AutoApprove | ApprovalMode::Custom
             ));
         }
-        // The same bargain for delegation: the switch is what the prompt would have asked, and the
-        // subagent reads only. Plan-only still refuses it above, because `evaluate` treats a second
-        // model run as a side effect rather than as a read.
+        // The same bargain for delegation, which is a second model run rather than a change to the
+        // folder. Plan-only still refuses it above, because `evaluate` treats a second model run as a
+        // side effect rather than as a read.
         if tool_id == "spawn_subagent"
             && self.subagents_enabled
             && self.mode != ApprovalMode::AskAlways
@@ -121,7 +125,10 @@ impl Approvals {
             ));
         }
         match self.mode {
-            ApprovalMode::AskAlways => None,
+            // Ask means "stop before anything changes". A read changes nothing, so it runs as it does
+            // under Auto: a dial that stopped at every file a run opened would be a wall of prompts in
+            // front of the one decision the user meant to make.
+            ApprovalMode::AskAlways => matches!(class, PermissionClass::ReadOnly).then_some(true),
             ApprovalMode::PlanOnly => Some(matches!(class, PermissionClass::ReadOnly)),
             ApprovalMode::AutoApprove | ApprovalMode::Custom => match class {
                 PermissionClass::ReadOnly

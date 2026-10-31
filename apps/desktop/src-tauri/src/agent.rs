@@ -32,7 +32,7 @@ use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
 
 use freecode_config::Settings;
-use freecode_core::approvals::{evaluate, ApprovalDecision, Pending};
+use freecode_core::approvals::{evaluate, ApprovalDecision, ApprovalRequest, Pending};
 use freecode_core::events::{AgentEvent, NoticeCode, ToolOutcome};
 use freecode_core::transcript::{
     tool_batch, DiffStat, EditedFile, Hunk, StepKind, StepStatus, TranscriptStep,
@@ -156,7 +156,7 @@ pub(crate) fn run_one(
     let mut row = started_row(name, &arguments);
     emit(app, AgentEvent::ToolStarted { step: row.clone() });
 
-    let staged = match cleared(name, &arguments, &call.id, settings, policy) {
+    let staged = match cleared(app, name, &arguments, &call.id, settings, policy) {
         Ok(()) => {
             // Before the executor touches disk: these are the texts a revert puts back, and reading
             // them here is what lets the pair of the old and the new state be recorded together.
@@ -469,32 +469,95 @@ pub(crate) fn watcher_for(app: &AppHandle, step_id: &str) -> freecode_tools::Wat
     })
 }
 
-/// Approval, then the sandbox. `Ok(())` is the only answer that lets a read happen, and everything
-/// else comes back as the sentence the row and the model both get.
+/// Approval, then the sandbox. `Ok(())` is the only answer that lets a call run, and everything else
+/// comes back as the sentence the row and the model both get.
 ///
-/// A prompt this build cannot show is a refusal rather than a wait: the approval dial is in the
-/// composer, and a run hanging on a decision nothing can answer reads as a stalled server.
+/// A call the policy will not settle on its own is put to the window and the thread waits for the answer.
+/// This runs on the blocking pool, which is the one place a wait like this costs nothing: the event loop
+/// stays free to deliver the press that ends it.
 pub(crate) fn cleared(
+    app: &AppHandle,
     name: &str,
     arguments: &Value,
     call_id: &str,
     settings: &Settings,
     policy: &SandboxPolicy,
 ) -> Result<(), String> {
+    let Some(request) = gated(name, arguments, call_id, settings, policy)? else {
+        return Ok(());
+    };
+    approved(&request, crate::approve::ask(app, &request))
+}
+
+/// The same check for a caller that is on the event loop rather than on the blocking pool, where the
+/// wait has to be handed off rather than held.
+pub(crate) async fn cleared_on_loop(
+    app: &AppHandle,
+    name: &str,
+    arguments: &Value,
+    call_id: &str,
+    settings: &Settings,
+    policy: &SandboxPolicy,
+) -> Result<(), String> {
+    let Some(request) = gated(name, arguments, call_id, settings, policy)? else {
+        return Ok(());
+    };
+    approved(&request, crate::approve::ask_await(app, &request).await)
+}
+
+/// What the policy makes of a call: nothing to answer, the sentence it is refused in, or the prompt the
+/// window has to answer before anything runs.
+///
+/// The free route reads this too, so a call the service asks about is decided by the same dial, the
+/// same switches and the same allow/deny lists as one the loop runs itself — and a prompt that means the
+/// same thing on both routes says the same thing in the window.
+pub(crate) fn gated(
+    name: &str,
+    arguments: &Value,
+    call_id: &str,
+    settings: &Settings,
+    policy: &SandboxPolicy,
+) -> Result<Option<ApprovalRequest>, String> {
     let tool = freecode_tools::find(name).ok_or_else(|| format!("no tool named {name}"))?;
     match evaluate(&tool, arguments, &settings.approvals, policy, call_id) {
-        Pending::Decided(decision) if decision.is_allowed() => Ok(()),
+        Pending::Decided(decision) if decision.is_allowed() => Ok(None),
         Pending::Decided(ApprovalDecision::UserDenied)
-        | Pending::Decided(ApprovalDecision::TimedOut) => Err("the call was not approved".to_string()),
+        | Pending::Decided(ApprovalDecision::TimedOut) => {
+            Err("the call was not approved".to_string())
+        }
         Pending::Decided(_) => Err(format!(
             "{} is refused by the approval policy in Settings",
             tool.title
         )),
-        Pending::Prompt(request) => Err(format!(
-            "{} needs an approval this build does not ask for: set the approval control to Auto, or \
-             ask without tools",
+        Pending::Prompt(request) => Ok(Some(request)),
+    }
+}
+
+/// The window's answer, as the loop's: run, or the words the row and the model both get.
+///
+/// A prompt that never reached a window is told as that rather than as a denial. "You did not approve
+/// this" about a question that was never asked would put the user's refusal in the model's mouth and in
+/// the transcript, and it is the one kind of sentence this app has to be exact about.
+///
+/// The free route folds the same sentence into the verdict it sends back to the service, so a call the
+/// user refused reads alike however it was offered.
+pub(crate) fn approved(
+    request: &ApprovalRequest,
+    answer: Result<ApprovalDecision, String>,
+) -> Result<(), String> {
+    match answer {
+        Ok(decision) if decision.is_allowed() => Ok(()),
+        Ok(ApprovalDecision::TimedOut) => Err(format!(
+            "{} waited {} s for an approval that never came, so it did not run. Answer the approval \
+             prompt in the window while the run is waiting, or set the approval control to Auto.",
+            request.headline,
+            (request.timeout_ms / 1000).max(1)
+        )),
+        Ok(_) => Err(format!(
+            "{} was not approved, so nothing it would have changed happened.",
             request.headline
         )),
+        Err(why) => Err(format!("{} could not be put to you: {why}", request.headline)),
     }
 }
 

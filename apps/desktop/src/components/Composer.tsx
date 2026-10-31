@@ -76,10 +76,10 @@ function PillBody({
 /**
  * The composer's approval selector is the agent loop's permission dial, and it edits the one value the
  * loop reads: `approvals.mode` in the settings the host loads when a prompt is sent, which is the same
- * document the Settings page writes. A call the mode refuses comes back as a blocked row naming the
- * policy, so the label has to be exact — and this build has no prompt for a call to wait on, which
- * means the mode that would ask refuses instead. Hover says so per mode, because "Ask every time" that
- * refused everything would be a worse surprise than naming it.
+ * document the Settings page writes. A call the mode settles on its own comes back as a row naming the
+ * policy it settled under; a call it cannot settle stops the run on a card over this box, and waits for
+ * the press. Hover spells both out per mode, because the difference between the two dials is precisely
+ * how often the run stops in front of you.
  */
 export function Composer({ locale, onPickModel }: { locale: Locale; onPickModel: () => void }) {
   const running = useTranscript((s) => s.running);

@@ -116,8 +116,8 @@ pub fn evaluate(
     }
 
     // 2c. A subagent is a second model run, and its own switch is that run's consent. Off means the
-    // call does not reach the loop at all; the page reports the refusal rather than a prompt this
-    // build cannot show.
+    // call does not reach the loop at all — a prompt would ask for permission to turn a switch the
+    // page has already set. On, and the dial's answer decides whether the run also stops to ask.
     if tool.id == "spawn_subagent" && !approvals.subagents_enabled {
         return Pending::Decided(ApprovalDecision::BlockedByPolicy);
     }
@@ -416,24 +416,46 @@ mod tests {
         );
     }
 
+    /// The dial's own bargain, and the reason a prompt is worth having: Ask stops at every change and
+    /// at no read. A run that opened six files to answer one question would otherwise put six cards in
+    /// front of the user for the one thing they meant to decide on.
     #[test]
-    fn ask_always_prompts_even_for_reads() {
+    fn ask_prompts_for_every_change_and_for_no_read() {
         let dir = tempfile::tempdir().unwrap();
         let approvals = Approvals {
             mode: ApprovalMode::AskAlways,
             ..Default::default()
         };
-        let tool = find("read_file").unwrap();
-        assert!(matches!(
-            evaluate(
-                &tool,
-                &json!({ "path": "a" }),
-                &approvals,
-                &sandbox(dir.path()),
-                "c"
-            ),
-            Pending::Prompt(_)
-        ));
+        for id in ["read_file", "list_dir", "grep_search", "git_status"] {
+            let tool = find(id).unwrap();
+            assert_eq!(
+                evaluate(
+                    &tool,
+                    &json!({ "path": "a" }),
+                    &approvals,
+                    &sandbox(dir.path()),
+                    "c"
+                ),
+                Pending::Decided(ApprovalDecision::AutoAllowed),
+                "{id} is a read and changes nothing"
+            );
+        }
+        for id in ["write_file", "edit_file", "apply_patch"] {
+            let tool = find(id).unwrap();
+            assert!(
+                matches!(
+                    evaluate(
+                        &tool,
+                        &json!({ "path": "a.txt" }),
+                        &approvals,
+                        &sandbox(dir.path()),
+                        "c"
+                    ),
+                    Pending::Prompt(_)
+                ),
+                "{id} changes the folder and is the user's to approve"
+            );
+        }
     }
 
     #[test]

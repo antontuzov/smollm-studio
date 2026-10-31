@@ -342,13 +342,25 @@ pub enum AgentEvent {
         /// read that completes it, so a UTF-8 character is never sent as a replacement mark.
         chunk: String,
     },
-    /// Approval required before the call may run.
+    /// Approval required before the call may run: the prompt the window answers, and the wait this run
+    /// is parked on until it does.
+    ///
+    /// `call_id` is what the window's answer names, so a batch that has two calls waiting at once can
+    /// tell them apart. `timeout_ms` is the host's own patience, sent rather than copied by the window
+    /// so the countdown the user reads is the one that actually decides.
     ApprovalRequested {
         call_id: String,
+        tool_id: String,
         headline: String,
         permission: PermissionClass,
         timeout_ms: u64,
+        /// The exact command, when this is a call that runs one: the headline says what the run is
+        /// about to do in the interface's language, and this is the argv behind it, unedited.
+        #[serde(default)]
+        command: Option<String>,
     },
+    /// The answer a prompt got, from the user or from its time running out. It closes the card the
+    /// window is showing, which is what makes a denied call and an unanswered one read differently.
     ApprovalResolved {
         call_id: String,
         decision: crate::approvals::ApprovalDecision,
