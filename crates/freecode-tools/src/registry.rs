@@ -58,7 +58,11 @@ impl ToolCall {
     }
 }
 
-/// The registry, in the order the model sees it.
+/// Everything this build can do when a run is allowed to act, in the order the model sees it.
+///
+/// The registry is the offer, not a catalog of intentions: every entry here reaches a runner, either
+/// an executor in [`crate::exec`] or the loop's own delegation. A surface that lists capabilities can
+/// print this and be accurate.
 pub fn registry() -> Vec<ToolDescriptor> {
     use PermissionClass::{Network, ReadOnly, SideEffect, WorkspaceWrite};
 
@@ -163,17 +167,6 @@ pub fn registry() -> Vec<ToolDescriptor> {
             ),
         },
         ToolDescriptor {
-            id: "codebase_search",
-            title: "Search codebase",
-            description: "Semantic search over the current workspace.",
-            permission: ReadOnly,
-            requires_network: false,
-            input_schema: s(
-                json!({ "query": { "type": "string" }, "max_results": { "type": "integer" } }),
-                &["query"],
-            ),
-        },
-        ToolDescriptor {
             id: "write_file",
             title: "Create file",
             description: "Create a file inside the workspace with the given contents, making the \
@@ -217,28 +210,6 @@ pub fn registry() -> Vec<ToolDescriptor> {
             permission: WorkspaceWrite,
             requires_network: false,
             input_schema: s(json!({ "patch": { "type": "string" } }), &["patch"]),
-        },
-        ToolDescriptor {
-            id: "delete_path",
-            title: "Delete file",
-            description: "Remove a file or directory inside the workspace.",
-            permission: WorkspaceWrite,
-            requires_network: false,
-            input_schema: s(
-                json!({ "path": { "type": "string" }, "recursive": { "type": "boolean" } }),
-                &["path"],
-            ),
-        },
-        ToolDescriptor {
-            id: "move_path",
-            title: "Move file",
-            description: "Rename or move a workspace path within the sandbox.",
-            permission: WorkspaceWrite,
-            requires_network: false,
-            input_schema: s(
-                json!({ "from": { "type": "string" }, "to": { "type": "string" } }),
-                &["from", "to"],
-            ),
         },
         ToolDescriptor {
             id: "terminal",
@@ -294,17 +265,6 @@ pub fn registry() -> Vec<ToolDescriptor> {
             input_schema: s(
                 json!({ "paths": { "type": "array", "items": { "type": "string" } } }),
                 &[],
-            ),
-        },
-        ToolDescriptor {
-            id: "format_code",
-            title: "Format code",
-            description: "Apply the workspace formatter to the given paths.",
-            permission: WorkspaceWrite,
-            requires_network: false,
-            input_schema: s(
-                json!({ "paths": { "type": "array", "items": { "type": "string" } }, "check": { "type": "boolean" } }),
-                &["paths"],
             ),
         },
         ToolDescriptor {
@@ -574,48 +534,6 @@ pub fn registry() -> Vec<ToolDescriptor> {
             ),
         },
         ToolDescriptor {
-            id: "http_request",
-            title: "HTTP request",
-            description: "Issue an HTTP request to an allowed host with explicit method and body.",
-            permission: Network,
-            requires_network: true,
-            input_schema: s(
-                json!({
-                    "method": { "type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"] },
-                    "url": { "type": "string", "format": "uri" },
-                    "headers": { "type": "object", "additionalProperties": { "type": "string" } },
-                    "body": { "type": "string" }
-                }),
-                &["method", "url"],
-            ),
-        },
-        ToolDescriptor {
-            id: "install_extension",
-            title: "Install extension",
-            description: "Install a Skill, MCP server or plugin from the extension marketplace.",
-            permission: Network,
-            requires_network: true,
-            input_schema: s(
-                json!({ "id": { "type": "string" }, "version": { "type": "string" } }),
-                &["id"],
-            ),
-        },
-        ToolDescriptor {
-            id: "mcp_call",
-            title: "Call tool from extension",
-            description: "Invoke a tool exposed by a connected MCP server.",
-            permission: Network,
-            requires_network: false,
-            input_schema: s(
-                json!({
-                    "server": { "type": "string" },
-                    "tool": { "type": "string" },
-                    "arguments": { "type": "object" }
-                }),
-                &["server", "tool"],
-            ),
-        },
-        ToolDescriptor {
             id: "spawn_subagent",
             title: "Run subagent",
             description: "Delegate one self-contained question to a subagent: a second model run that \
@@ -633,59 +551,7 @@ pub fn registry() -> Vec<ToolDescriptor> {
                 &["task"],
             ),
         },
-        ToolDescriptor {
-            id: "create_artifact",
-            title: "Create artifact",
-            description: "Publish a document, page or code artifact into the inspector panel.",
-            permission: WorkspaceWrite,
-            requires_network: false,
-            input_schema: s(
-                json!({
-                    "kind": { "type": "string", "enum": ["document", "code", "webpage", "diagram"] },
-                    "title": { "type": "string" },
-                    "content": { "type": "string" }
-                }),
-                &["kind", "title", "content"],
-            ),
-        },
-        ToolDescriptor {
-            id: "ask_user",
-            title: "Ask for input",
-            description: "Pause the run and ask the user a question with selectable options.",
-            permission: ReadOnly,
-            requires_network: false,
-            input_schema: s(
-                json!({
-                    "question": { "type": "string" },
-                    "options": { "type": "array", "items": { "type": "string" } }
-                }),
-                &["question"],
-            ),
-        },
-        ToolDescriptor {
-            id: "wait_for_port",
-            title: "Wait for port",
-            description: "Block until a local port accepts connections, for dev-server workflows.",
-            permission: SideEffect,
-            requires_network: false,
-            input_schema: s(
-                json!({ "port": { "type": "integer", "minimum": 1, "maximum": 65535 }, "timeout_seconds": { "type": "integer" } }),
-                &["port"],
-            ),
-        },
     ]
-}
-
-/// The `tools` array for the chat request, in the OpenAI function form llama.cpp's server parses.
-///
-/// `arguments` normalization happens in [`ToolCall::arguments_wire`]; this function only shapes the
-/// declaration side.
-pub fn tool_specs(allow_network: bool) -> Vec<Value> {
-    registry()
-        .into_iter()
-        .filter(|t| allow_network || !t.requires_network)
-        .map(spec)
-        .collect()
 }
 
 /// The tools this build can actually run: the four workspace reads, the plan the run keeps, the
@@ -693,10 +559,12 @@ pub fn tool_specs(allow_network: bool) -> Vec<Value> {
 /// read-only git calls, the five calls that change the repository or take it to GitHub, and the two
 /// calls that reach the internet, whose executors live in [`crate::exec`] and [`crate::web`].
 ///
-/// The rest of the registry is a declaration with no verb behind it — a schema, a permission class,
-/// and nothing that touches the disk. Offering one of those would invite the model to ask for a
-/// delete that can only come back refused, so a run that carries tools hands over this list and
-/// nothing else. The writes are on it because the sandbox bounds them to the workspace root — one
+/// This list plus [`DELEGATED`] is the whole registry: every declaration has an executor behind it,
+/// and a capability this build does not have is simply absent rather than declared. A schema with no
+/// verb under it is still an offer — the model reads the description, asks for the call, and spends a
+/// round being told the delete it asked for cannot happen — so nothing is declared that cannot run,
+/// and the registry's own test holds the two lists as one. The writes are on it because the sandbox
+/// bounds them to the workspace root — one
 /// makes a file that is not there, one changes text it has to find first, and one applies a diff
 /// whose every old line it has to find first. The shell and the runners are on it because the user's
 /// Terminal access switch bounds them: the switch is off by default, and [`executable_specs`] does
@@ -804,6 +672,9 @@ pub fn read_only_specs() -> Vec<Value> {
         .collect()
 }
 
+/// One declaration in the `tools` array's OpenAI function form, which is what llama.cpp's server and
+/// the free gateway both parse. `arguments` normalization happens in [`ToolCall::arguments_wire`];
+/// this shapes the declaration side only.
 fn spec(t: ToolDescriptor) -> Value {
     json!({
         "type": "function",
@@ -885,7 +756,7 @@ pub fn summary(tool_id: &str, arguments: &Value) -> String {
                 .and_then(Value::as_str)
                 .unwrap_or("<no title>")
         ),
-        "fetch_url" | "http_request" => format!(
+        "fetch_url" => format!(
             "Read {}",
             arguments.get("url").and_then(Value::as_str).unwrap_or("")
         ),
@@ -1016,6 +887,34 @@ mod tests {
         );
     }
 
+    /// The registry is the offer rather than a wish list: every entry reaches a runner, either an
+    /// executor in [`crate::exec`] or the loop's own delegation. A schema with no verb behind it is
+    /// still a promise — the model reads "Remove a file or directory inside the workspace", asks for
+    /// the call, and spends a round being refused — so this is the line a new declaration has to
+    /// cross before this build can list one.
+    #[test]
+    fn the_registry_declares_only_what_a_run_can_actually_run() {
+        let r = registry();
+        for t in &r {
+            assert!(is_runnable(t.id), "{} is declared with no executor", t.id);
+        }
+        assert_eq!(
+            r.len(),
+            EXECUTABLE.len() + DELEGATED.len(),
+            "the registry and the runnable lists have drifted apart"
+        );
+        // The same set the model is handed once every switch is on, so a tool cannot be declared and
+        // then gated out of every offer by accident.
+        let all = executable_specs(true, true, true);
+        let offered: Vec<&str> = all
+            .iter()
+            .map(|s| s["function"]["name"].as_str().unwrap())
+            .collect();
+        for t in &r {
+            assert!(offered.contains(&t.id), "{} is never offered", t.id);
+        }
+    }
+
     #[test]
     fn every_class_is_represented_so_the_approval_engine_has_something_to_discriminate() {
         let r = registry();
@@ -1075,8 +974,8 @@ mod tests {
 
     #[test]
     fn network_tools_are_hidden_until_a_remote_provider_is_configured() {
-        let offline = tool_specs(false);
-        let online = tool_specs(true);
+        let offline = executable_specs(false, true, true);
+        let online = executable_specs(true, true, true);
         assert!(offline.len() < online.len());
         let names: Vec<&str> = offline
             .iter()
@@ -1219,16 +1118,30 @@ mod tests {
              checkout, the three page actions that change only the panel's document, and the two \
              pictures of it kept beside the app's data"
         );
-        assert!(
-            !is_executable("delete_path"),
-            "a run cannot take a file away"
-        );
+        // A run cannot take a file away, search a workspace there is no index for, install an add-on
+        // or ask the user a question. Those are not capabilities this build declines — they are not
+        // capabilities it claims, so no schema, no row and no description promises them.
+        for id in [
+            "delete_path",
+            "move_path",
+            "format_code",
+            "codebase_search",
+            "http_request",
+            "install_extension",
+            "mcp_call",
+            "create_artifact",
+            "ask_user",
+            "wait_for_port",
+        ] {
+            assert!(
+                find(id).is_none(),
+                "{id} is declared with nothing behind it"
+            );
+        }
         assert!(
             is_executable("terminal"),
             "the shell has an executor; the switch is what keeps it out of a run"
         );
-        // `codebase_search` is a declared read with no index behind it, so it stays out too.
-        assert!(!is_executable("codebase_search"));
         // Delegation is runnable without an executor: the chat loop runs it, so it is offered with the
         // rest while its switch is on — and counted by the same roll-call the page prints.
         assert!(is_delegated("spawn_subagent"));

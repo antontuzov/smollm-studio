@@ -57,7 +57,7 @@
   "inspector.title": "Run inspector",
   "inspector.files": "Files changed",
   "inspector.subagents": "Subagents",
-  "inspector.skills": "Skills & MCP",
+  "inspector.skills": "Tools the run used",
   "inspector.skills.count": "{{count}} used",
   "inspector.artifact": "Artifact",
   "inspector.pictures": "Pictures",

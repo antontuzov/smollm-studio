@@ -127,8 +127,9 @@ pub(crate) fn run_one(
         };
     }
 
-    // Not in the offered set — either the registry has no such tool or it has one this build cannot
-    // run. Either way no row opens, because a row would promise work that never happens.
+    // Not a call this build has. The registry lists nothing without a runner behind it, so reaching
+    // here means the model named a capability on its own — and no row opens either way, because a row
+    // would promise work that never happens.
     if !is_executable(name) {
         emit(
             app,
@@ -137,7 +138,7 @@ pub(crate) fn run_one(
         return Ran {
             call_id: call.id.clone(),
             result: format!(
-                "{name} is not available in this build: it has no executor. The calls it can make \
+                "{name} is not a call this build has. The calls it can make \
                   are read_file, list_dir, glob, grep_search, write_file, edit_file and apply_patch, \
                  which reach nothing outside this workspace; git_status, git_diff and git_log, which \
                  only read the repository; git_stage and git_branch, which change the checkout; \
@@ -1005,7 +1006,8 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
         };
-        // A call for a tool with no executor gets a notice, not a row, so the header cannot claim it.
+        // A call for a name this build does not have gets a notice, not a row, so the header cannot
+        // claim it.
         assert_eq!(rows_for(&called(&["read_file", "grep_search"])), 2);
         assert_eq!(rows_for(&called(&["read_file", "write_file"])), 2);
         // Delegation is run by the loop rather than an executor, and still opens the row it counts.

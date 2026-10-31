@@ -148,7 +148,8 @@ pub enum NoticeCode {
     EngineRestarted,
     /// The model emitted a tool call in a chat that offers it no tools.
     ToolCallWithoutTools,
-    /// The model asked for a tool this build has no executor for, while tools were offered.
+    /// The model asked for a call this build does not have, while tools were offered. A model inventing
+    /// a name is what reaches this now: the registry holds no entry without a runner behind it.
     ToolNotOffered,
     /// The tool loop gave up before the answer came, because the run kept calling tools.
     ToolLoopCapped,

@@ -38,8 +38,7 @@ pub use page::{
 };
 pub use registry::{
     executable_specs, find, is_delegated, is_executable, is_runnable, patch_target,
-    read_only_specs, registry, summary, tool_specs, ToolCall, ToolDescriptor, DELEGATED,
-    EXECUTABLE,
+    read_only_specs, registry, summary, ToolCall, ToolDescriptor, DELEGATED, EXECUTABLE,
 };
 pub use sandbox::{Access, SandboxPolicy, SandboxViolation};
 pub use web::{

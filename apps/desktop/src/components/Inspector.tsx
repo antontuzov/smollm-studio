@@ -424,9 +424,11 @@ export function Inspector({ locale, fixture }: { locale: Locale; fixture: boolea
       })),
     [rows],
   );
-  // The capabilities are the same derivation over the same span, named by the row's own label: what
-  // "Skills & MCP" holds here is what this build's agent can be handed, which is the tool registry's
-  // vocabulary the transcript already speaks — see `Extensions.tsx`.
+  // The capabilities are the same derivation over the same span, named by the row's own label: this
+  // group holds the calls the run actually made, which is the tool registry's vocabulary the transcript
+  // already speaks — see `Extensions.tsx`. It is not labelled after an add-on store, because this build
+  // has no skills and no MCP servers to list, and a group named for them would report a capability the
+  // app does not have.
   const capabilities = useMemo<Item[]>(
     () =>
       usedCapabilities(reviewRows(rows, "lastTurn")).map((step) => ({

@@ -5,8 +5,9 @@
 //! registry — plus the two facts a user cannot get from anywhere else: which of those calls run without
 //! interrupting, and which the sandbox would refuse. Both are computed by the engine that decides them
 //! at run time ([`freecode_core::approvals::evaluate`]) against the settings in force, so the page cannot
-//! tell a friendlier story than the loop acts. A tool the registry lists but this build has no executor
-//! for is said so rather than hidden, because the transcript will show a row for it either way.
+//! tell a friendlier story than the loop acts. The registry holds nothing but calls that reach a runner,
+//! so what is on this page is what a run can do; the count of each is on it because the switches decide
+//! which of them the next prompt is actually offered.
 
 use freecode_config::agent::{ApprovalMode, PermissionClass};
 use freecode_config::Settings;
@@ -29,8 +30,10 @@ pub struct ToolRow {
     pub description: String,
     pub permission: PermissionClass,
     pub requires_network: bool,
-    /// Whether a call reaches an executor in this build. A tool that is only declared still gets a
-    /// transcript row; what it does not get is an outcome.
+    /// Whether a call reaches a runner in this build. The registry holds nothing but calls that do, so
+    /// today this is true of every row — and the page keeps the field because it is the fact that would
+    /// change first if a declaration were ever added without a verb, and a row saying "declared, not
+    /// run" is the honest version of that mistake.
     pub runnable: bool,
     pub decision: &'static str,
 }
@@ -40,8 +43,9 @@ pub struct ToolRow {
 #[serde(rename_all = "camelCase")]
 pub struct Inventory {
     pub tools: Vec<ToolRow>,
-    /// How many of them a call can actually run through. Printed beside the count of what is declared
-    /// so the gap is the page's headline rather than a footnote.
+    /// How many of them a call can actually run through, printed beside the count of what is declared.
+    /// The two figures are equal because the registry is built that way, and the page says both so the
+    /// equality is something the user can see rather than take on trust.
     pub runnable: usize,
     /// The folder a runnable call may read, as the run's sandbox resolves it — the project folder
     /// picked in Settings when there is one. A path the user needs to be able to check, which is why
@@ -119,7 +123,7 @@ mod tests {
     /// The four workspace reads, the plan list, the three repository reads, the three workspace
     /// writes, the nine browser calls, the two web calls, the one command, its three runners and
     /// the one delegation are what the agent loop actually offers today, and the page has to say so:
-    /// a list that showed all thirty-seven as live would describe an agent this build does not have.
+    /// a list that showed more than these as live would describe an agent this build does not have.
     #[test]
     fn the_reads_the_writes_the_web_calls_the_shell_and_the_delegation_are_what_a_call_can_run_through(
     ) {
@@ -190,8 +194,10 @@ mod tests {
             assert!(row(&inv, id).runnable, "{id}");
             assert_eq!(row(&inv, id).decision, "blocked", "{id}");
         }
-        // And the calls that would take a file away are declared only.
-        assert!(!row(&inv, "delete_path").runnable);
+        // And nothing on the page is a promise rather than a call: the registry the page prints is the
+        // offer itself, so every row a user reads has a runner behind it.
+        assert_eq!(inv.runnable, inv.tools.len(), "{:?}", inv.tools);
+        assert!(row(&inv, "read_file").runnable);
     }
 
     /// The Subagents switch is the delegation's consent, and the page follows it the way the shell

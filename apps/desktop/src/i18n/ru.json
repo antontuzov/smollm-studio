@@ -57,7 +57,7 @@
   "inspector.title": "Инспектор запуска",
   "inspector.files": "Изменённые файлы",
   "inspector.subagents": "Субагенты",
-  "inspector.skills": "Навыки и MCP",
+  "inspector.skills": "Использованные инструменты",
   "inspector.skills.count": "использовано: {{count}}",
   "inspector.artifact": "Артефакт",
   "inspector.pictures": "Снимки",

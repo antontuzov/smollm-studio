@@ -6,13 +6,13 @@
 // `freecode_tools::registry` is what the Coding loop offers — and this page reads it rather than
 // restating it, so a tool added there shows up here without a second edit.
 //
-// The two facts worth a page are the ones no other surface shows. Which calls reach an executor in
-// this build (four reads and two writes inside the workspace, plus the two web calls the privacy switch
-// has to be on for; the rest are declared, and a call to one
-// is answered with a notice that says so rather than run), and what the run would do with each one
-// right now. The second is computed by `freecode_core::approvals::evaluate` against the settings and
-// sandbox in force — the same engine that decides it mid-run, so the page cannot tell a friendlier
-// story than the loop acts.
+// The two facts worth a page are the ones no other surface shows. Which calls reach a runner in
+// this build (the four reads and four writes inside the workspace, the nine page calls, the two web
+// calls the privacy switch has to be on for, the command and its three runners, the repository's
+// eight and the one delegation — the registry holds nothing else, so a row here is a capability
+// rather than an intention), and what the run would do with each one right now. The second is
+// computed by `freecode_core::approvals::evaluate` against the settings and sandbox in force — the
+// same engine that decides it mid-run, so the page cannot tell a friendlier story than the loop acts.
 import { useEffect, useState } from "react";
 
 import { Row, Section } from "./controls";
@@ -110,6 +110,10 @@ export function Extensions({ locale, onBack }: { locale: Locale; onBack: () => v
   }, [inv]);
 
   const blocked = inv?.tools.filter((r) => r.decision === "blocked").length ?? 0;
+  // The registry holds only calls that reach a runner, so this is empty today. The section stays
+  // because it is what an unimplemented declaration would read as — a row that says so out loud
+  // rather than a capability the page implies.
+  const declaredOnly = inv?.tools.filter((r) => !r.runnable) ?? [];
 
   return (
     <div className="flex h-full min-h-0 bg-bg text-fg">
@@ -194,16 +198,16 @@ export function Extensions({ locale, onBack }: { locale: Locale; onBack: () => v
                   ))}
               </Section>
 
-              <Section
-                label={t("declaredOnly")}
-                description={t("declaredOnly.desc", { count: inv.tools.length - inv.runnable })}
-              >
-                {inv.tools
-                  .filter((r) => !r.runnable)
-                  .map((r) => (
+              {declaredOnly.length > 0 && (
+                <Section
+                  label={t("declaredOnly")}
+                  description={t("declaredOnly.desc", { count: declaredOnly.length })}
+                >
+                  {declaredOnly.map((r) => (
                     <Tool key={r.id} tool={r} t={t} />
                   ))}
-              </Section>
+                </Section>
+              )}
 
               <p className="text-fine text-faint">{t("note")}</p>
             </>

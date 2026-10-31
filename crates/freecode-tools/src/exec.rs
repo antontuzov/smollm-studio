@@ -5180,24 +5180,24 @@ mod tests {
         assert!(matches!(err, ToolsError::Sandbox(_)), "{err:?}");
     }
 
+    /// The registry is exactly what runs, so the only way a call reaches this file naming a capability
+    /// this build does not have is a model inventing one. It is refused at the name, before the sandbox
+    /// is consulted and before a row opens, because a row would promise work that never happens.
     #[test]
-    fn a_declared_tool_without_an_executor_is_refused_rather_than_run() {
+    fn a_name_this_build_does_not_declare_is_refused_before_anything_runs() {
         let (_d, p) = fixture();
-        // `codebase_search` is a read the registry declares and nothing implements: offering it would
-        // be a promise this file cannot keep.
-        let err = ran("codebase_search", &json!({ "query": "where is auth" }), &p)
-            .expect_err("no executor exists");
-        assert!(matches!(err, ToolsError::NoExecutor(_)), "{err:?}");
-        // And the calls that could take a file away or move it stay unimplemented, so no argument
-        // shape can reach them.
-        for id in ["delete_path", "move_path"] {
-            assert!(
-                matches!(
-                    ran(id, &json!({ "path": "src/lib.rs" }), &p),
-                    Err(ToolsError::NoExecutor(_))
-                ),
-                "{id} has an executor now, and this test is the only thing saying so"
-            );
+        for id in [
+            "codebase_search",
+            "delete_path",
+            "move_path",
+            "format_code",
+            "install_extension",
+            "mcp_call",
+            "ask_user",
+        ] {
+            let err = ran(id, &json!({ "path": "src/lib.rs" }), &p)
+                .expect_err("nothing is declared under this name");
+            assert!(matches!(err, ToolsError::UnknownTool(_)), "{id}: {err:?}");
         }
     }
 
