@@ -671,6 +671,8 @@
   "notice.checks-not-run": "This run changed files, and the project's checks were not run: Terminal access is off in Settings, so this window runs no command. Turn it on to have the tests measured after each change.",
   "notice.checks-unavailable": "This run changed files, and the project declares no test, build or lint command at its root, so there was no check to run. The change is unverified.",
   "notice.checks-failed": "The project's check failed with exit {{code}}, so this run's change is not verified. The row above holds the command and its output.",
+  "notice.instructions-read": "This run carries your instructions from {{files}} — {{chars}} characters, read from the folder before the request went out. Where they and this app's own contract disagree about how the work should be done, these are the ones the answer follows.",
+  "notice.instructions-cut": "{{files}} hold more than the {{chars}} characters the instruction files share, so this run saw only the beginning of them. Shorten the file if a rule in the rest of it has to be honoured.",
   "blocker.engine-not-installed.title": "The engine isn't on this machine yet",
   "blocker.engine-not-installed.detail": "FreeCode runs models with one specific build of llama.cpp, and this machine doesn't have it yet. Installing it fetches exactly the build this app was pinned to — nothing else is chosen for you.",
   "blocker.stock-engine-rejected.title": "This model can't run on standard llama.cpp",

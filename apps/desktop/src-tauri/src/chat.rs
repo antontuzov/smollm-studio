@@ -545,6 +545,18 @@ struct Stops<'a> {
     stopped: &'a AtomicBool,
 }
 
+/// What one run settles before its first request and then replays unchanged on every round: whether
+/// the user has pressed Stop, and what the machine's and the folder's instruction files said.
+///
+/// They travel together because both belong to the run rather than to a round — a follow-up request
+/// is sent with the same system turn, and a subagent is asked under the same pair as its parent.
+/// Carrying the folder's text this way is also what keeps it read once: a run's contract cannot shift
+/// underneath it mid-answer because there is no second read left to do.
+struct Run<'a> {
+    stops: Stops<'a>,
+    instructions: String,
+}
+
 /// Stream one round of an answer.
 ///
 /// `offered` is whether this run put tools on the request. A call arriving without any is the model
@@ -966,18 +978,22 @@ fn planning(settings: &Settings, tools: bool) -> bool {
 /// tools the composer asked for.
 ///
 /// Rebuilt per round rather than extended, because the only thing a round adds is in the history — and
-/// the system prompt is read fresh, so a Settings change made mid-run is in the next request.
+/// the settings prompt is read fresh, so a Settings change made mid-run is in the next request. The
+/// project's own instructions are the one part that is not: `instructions` is what the folder held
+/// when the run began, resolved once by [`chat_send`] and carried down, so a file saved mid-answer
+/// cannot change the contract the run is already working to.
 fn request_for(
     state: &ChatState,
     settings: &Settings,
     answer: &Answer,
     tools: bool,
+    instructions: &str,
 ) -> ChatRequest {
     let plan = planning(settings, tools);
     let system = if plan {
-        plan_system(&settings.sampling.system_prompt)
+        plan_system(&settings.sampling.system_prompt, instructions)
     } else {
-        settings.sampling.system_prompt.clone()
+        with_instructions(&settings.sampling.system_prompt, instructions)
     };
     let mut request = ChatRequest::new(conversation(state, &system));
     request.max_tokens = answer.max_tokens();
@@ -1026,33 +1042,53 @@ fn clip_chars(text: &str, max: usize) -> String {
     clipped
 }
 
-/// The one system turn a subagent is given: the user's own instructions, then the subagent's bounds.
+/// Put the folder's own instructions at the end of a system turn, saying nothing when the folder had
+/// none. The text already carries its own heading and its own limits — see [`crate::instructions`].
+fn with_instructions(parent: &str, instructions: &str) -> String {
+    if instructions.trim().is_empty() {
+        return parent.to_string();
+    }
+    format!("{}\n\n{instructions}", parent.trim_end())
+}
+
+/// The one system turn a subagent is given: the user's own instructions, then the subagent's bounds,
+/// then the folder's.
 ///
 /// The shipped coding contract is not repeated here: it tells the model to make the change, which is
 /// the one thing a read-only subagent cannot do. A prompt the user wrote still leads, because that is
 /// their instruction about how work should be done; the offer below then says what this run may do.
-fn subagent_system(parent: &str) -> String {
+///
+/// The folder's text goes last, where a project's `AGENTS.md` is read by every other agent, and it
+/// carries its own limit sentence with it: what the run may do is settled by the offer above and by
+/// the approval engine, not by anything written in a file.
+fn subagent_system(parent: &str, instructions: &str) -> String {
     let parent = parent.trim();
-    if parent.is_empty() || parent == DEFAULT_SYSTEM_PROMPT {
+    let base = if parent.is_empty() || parent == DEFAULT_SYSTEM_PROMPT {
         SUBAGENT_SYSTEM.to_string()
     } else {
         format!("{parent}\n\n{SUBAGENT_SYSTEM}")
-    }
+    };
+    with_instructions(&base, instructions)
 }
 
 /// The one system turn a plan-mode run is given: the same bargain as [`subagent_system`], with
-/// [`PLAN_SYSTEM`] in place of the subagent's bounds.
+/// [`PLAN_SYSTEM`] in place of the subagent's bounds, and the folder's text last.
 ///
 /// The shipped contract is replaced rather than prefixed, because its first instruction is the act
 /// this mode forbids. A prompt the user wrote still leads: it is their instruction about how work
 /// should be done, and the plan contract only says what this run may do about it.
-fn plan_system(parent: &str) -> String {
+///
+/// The folder goes last for the reason it does everywhere else — a project's `AGENTS.md` is the most
+/// local thing in the turn, and a run reads its own directory's rules after the general ones. The
+/// block carries the limit sentence that keeps it from reaching past the read-only offer.
+fn plan_system(parent: &str, instructions: &str) -> String {
     let parent = parent.trim();
-    if parent.is_empty() || parent == DEFAULT_SYSTEM_PROMPT {
+    let base = if parent.is_empty() || parent == DEFAULT_SYSTEM_PROMPT {
         PLAN_SYSTEM.to_string()
     } else {
         format!("{parent}\n\n{PLAN_SYSTEM}")
-    }
+    };
+    with_instructions(&base, instructions)
 }
 
 /// What one subagent run produced, for the row and the parent's tool result.
@@ -1074,10 +1110,14 @@ async fn delegate(
     settings: &Settings,
     policy: &SandboxPolicy,
     task: &str,
-    stops: &Stops<'_>,
+    run: &Run<'_>,
 ) -> Result<Delegated, String> {
+    let stops = &run.stops;
     let mut history = vec![
-        Message::system(subagent_system(&settings.sampling.system_prompt)),
+        Message::system(subagent_system(
+            &settings.sampling.system_prompt,
+            &run.instructions,
+        )),
         Message::user(task),
     ];
     let mut request = ChatRequest::new(history.clone());
@@ -1213,8 +1253,8 @@ async fn run_delegation(
     settings: &Settings,
     policy: &SandboxPolicy,
     call: &freecode_llama::ToolCall,
-    stops: &Stops<'_>,
     allowed: bool,
+    run: &Run<'_>,
 ) -> Ran {
     let arguments: Value = serde_json::from_str(&call.arguments).unwrap_or_else(|_| json!({}));
     let task = arguments
@@ -1254,7 +1294,7 @@ async fn run_delegation(
     }
 
     let mut row = row;
-    match delegate(answer, settings, policy, &task, stops).await {
+    match delegate(answer, settings, policy, &task, run).await {
         Ok(done) => {
             row.finish(StepStatus::Done);
             let summary = Summary::said(
@@ -1303,8 +1343,9 @@ async fn run_rounds(
     settings: &Settings,
     mut request: ChatRequest,
     tools: bool,
-    stops: &Stops<'_>,
+    run: &Run<'_>,
 ) -> Result<Reply, String> {
+    let stops = &run.stops;
     let mut reply = stream_turn(app, answer, &request, tools, stops).await?;
     // The service's route needs nothing from this loop: it runs its calls itself, and the rows for
     // them are already emitted while the answer streams — and its `Reply` carries no call list, so a
@@ -1354,9 +1395,7 @@ async fn run_rounds(
                 if allowed {
                     delegations += 1;
                 }
-                ran.push(
-                    run_delegation(app, answer, settings, &policy, call, stops, allowed).await,
-                );
+                ran.push(run_delegation(app, answer, settings, &policy, call, allowed, run).await);
                 continue;
             }
             let (host, batch_settings, batch_policy, one) =
@@ -1430,7 +1469,7 @@ async fn run_rounds(
         if stops.stopped.load(Ordering::Relaxed) {
             break;
         }
-        request = request_for(state, settings, answer, tools);
+        request = request_for(state, settings, answer, tools, &run.instructions);
         reply = stream_turn(app, answer, &request, tools, stops).await?;
     }
     // The same measurement for this route: the model's own check is the better one when it ran, and
@@ -1709,14 +1748,44 @@ pub async fn chat_send(
     // do is already too big for the window, but what the run did with that is only known once the
     // server reports its own count.
     let outgrew = outgrew_window(*lock(&state.last_fill), answer.window_tokens());
-    let request = request_for(&state, &settings, &answer, tools);
+    // What the machine and the folder told the user's work to be, read once for the run. Words the
+    // user did not type are going into the system turn, so the transcript says which files they came
+    // from rather than leaving an answer that reads as if this app's own contract were the only one
+    // it was written under.
+    let found = crate::instructions::read(Some(&app), &settings);
+    let instructions = found.block();
+    if !instructions.is_empty() {
+        let files = found.labels();
+        let chars = found.chars().to_string();
+        emit(
+            &app,
+            AgentEvent::notice(
+                NoticeCode::InstructionsRead,
+                &[("files", files.as_str()), ("chars", chars.as_str())],
+            ),
+        );
+        if found.any_cut() {
+            let cut = found.cut_labels();
+            emit(
+                &app,
+                AgentEvent::notice(
+                    NoticeCode::InstructionsCut,
+                    &[("files", cut.as_str()), ("chars", chars.as_str())],
+                ),
+            );
+        }
+    }
+    let request = request_for(&state, &settings, &answer, tools, &instructions);
 
     let started = Instant::now();
-    let stops = Stops {
-        requested: &state.stop_requested,
-        stopped: &stopped,
+    let run = Run {
+        stops: Stops {
+            requested: &state.stop_requested,
+            stopped: &stopped,
+        },
+        instructions,
     };
-    let outcome = run_rounds(&app, &state, &answer, &settings, request, tools, &stops).await;
+    let outcome = run_rounds(&app, &state, &answer, &settings, request, tools, &run).await;
     *lock(&state.streaming) = false;
 
     match outcome {
@@ -2196,13 +2265,43 @@ mod tests {
     #[test]
     fn a_subagent_is_not_told_to_make_the_change_it_cannot_make() {
         // The shipped contract opens with "make the change"; a read-only run must not inherit it.
-        let shipped = subagent_system(DEFAULT_SYSTEM_PROMPT);
+        let shipped = subagent_system(DEFAULT_SYSTEM_PROMPT, "");
         assert_eq!(shipped, SUBAGENT_SYSTEM);
         assert!(!shipped.contains("make the change"));
         // A user's own words still lead, because that is how they asked for work to be done.
-        let mine = subagent_system("Answer like a pirate.");
+        let mine = subagent_system("Answer like a pirate.", "");
         assert!(mine.starts_with("Answer like a pirate."));
         assert!(mine.ends_with(SUBAGENT_SYSTEM));
+    }
+
+    #[test]
+    fn a_run_with_no_instruction_files_is_sent_exactly_the_prompt_it_was_before() {
+        // The feature has to be invisible when the folder has nothing to say: a run in a tree with no
+        // `AGENTS.md` must send byte-for-byte the prompt it sent before this existed.
+        assert_eq!(
+            with_instructions(DEFAULT_SYSTEM_PROMPT, ""),
+            DEFAULT_SYSTEM_PROMPT
+        );
+        assert_eq!(with_instructions("  ", ""), "  ");
+        assert_eq!(
+            with_instructions("Answer like a pirate.", "PROJECT INSTRUCTIONS\nUse tabs."),
+            "Answer like a pirate.\n\nPROJECT INSTRUCTIONS\nUse tabs."
+        );
+        // Trailing blank lines in the prompt do not become a gap the model reads as a section break.
+        assert!(with_instructions("Terse.\n\n\n", "Use tabs.").starts_with("Terse.\n\nUse tabs."));
+    }
+
+    #[test]
+    fn a_subagent_carries_the_folder_after_its_own_bounds() {
+        let with = subagent_system(DEFAULT_SYSTEM_PROMPT, "PROJECT INSTRUCTIONS\nUse tabs.");
+        assert!(with.contains("Use tabs."), "{with}");
+        // The folder's text ends the turn, the way every other agent reads a project's `AGENTS.md`:
+        // last, after the general rules, as the most local thing the run was told.
+        assert!(with.trim_end().ends_with("Use tabs."), "{with}");
+        // Being last is not being in charge: what this run may do is settled by the read-only offer
+        // printed above, and the block the caller hands in carries the sentence that says so.
+        assert!(with.contains(SUBAGENT_SYSTEM));
+        assert!(with.find(SUBAGENT_SYSTEM).unwrap() < with.find("Use tabs.").unwrap());
     }
 
     #[test]
@@ -2216,12 +2315,23 @@ mod tests {
 
         // The shipped contract tells the model to make the change, which is exactly the act this
         // mode forbids; the planning one replaces it rather than standing beside it.
-        assert_eq!(plan_system(DEFAULT_SYSTEM_PROMPT), PLAN_SYSTEM);
+        assert_eq!(plan_system(DEFAULT_SYSTEM_PROMPT, ""), PLAN_SYSTEM);
         assert!(!PLAN_SYSTEM.contains("make the change"));
         // A prompt the user wrote still leads, and the plan contract follows it.
-        let mine = plan_system("Answer in short bullets.");
+        let mine = plan_system("Answer in short bullets.", "");
         assert!(mine.starts_with("Answer in short bullets."));
         assert!(mine.ends_with(PLAN_SYSTEM));
+        // A folder's instructions are carried after the plan contract, where every agent reads a
+        // project's `AGENTS.md`. Last is not in charge: the offer above still settles what this run
+        // may do, and the block the host hands in carries the sentence that says so.
+        let folder = plan_system(
+            DEFAULT_SYSTEM_PROMPT,
+            "PROJECT INSTRUCTIONS\nShip on Fridays.",
+        );
+        assert!(folder.contains("Ship on Fridays."));
+        assert!(folder.trim_end().ends_with("Ship on Fridays."), "{folder}");
+        assert!(folder.contains(PLAN_SYSTEM));
+        assert!(folder.find(PLAN_SYSTEM).unwrap() < folder.find("Ship on Fridays.").unwrap());
 
         let offer = tool_offer(&settings);
         let names: Vec<&str> = offer
@@ -2623,11 +2733,11 @@ mod tests {
     /// one case where the bounds are the whole system turn.
     #[test]
     fn a_subagent_inherits_the_users_instructions_before_its_own_bounds() {
-        let inherited = subagent_system("You are terse.\n");
+        let inherited = subagent_system("You are terse.\n", "");
         assert!(inherited.starts_with("You are terse.\n\n"));
         assert!(inherited.ends_with(SUBAGENT_SYSTEM));
         assert!(!inherited.contains("You are terse.  \n"));
-        assert_eq!(subagent_system("   \n"), SUBAGENT_SYSTEM);
+        assert_eq!(subagent_system("   \n", ""), SUBAGENT_SYSTEM);
         // The bounds are the promise the switch makes: read-only, no network, and an answer rather
         // than an edit. A change to this sentence is a change to what the user consented to.
         for bound in ["cannot change", "cannot reach the internet", "read_file"] {

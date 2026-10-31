@@ -192,13 +192,23 @@ pub enum NoticeCode {
     ChecksUnavailable,
     /// The check the host ran after a run's edits ended with a failing status.
     ChecksFailed,
+    /// The run carries instructions the user wrote in a file, not in this conversation.
+    ///
+    /// The system turn is where an answer's habits come from, and a folder's `AGENTS.md` now goes into
+    /// it, so the transcript names the files rather than letting a borrowed instruction read as the
+    /// app's own.
+    InstructionsRead,
+    /// One of those files is longer than the room the instruction files share, so the run saw part of
+    /// it. Said because a project that wrote down a rule the run never received would otherwise be
+    /// answered as if the rule had reached it.
+    InstructionsCut,
 }
 
 impl NoticeCode {
     /// Every code the host can emit. `verify-transcript-i18n` walks this to require one catalog entry
     /// per code, so a notice added here without its sentence in both locales fails the build instead
     /// of rendering its own key in the middle of a transcript.
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 20] = [
         Self::EffortNotSupported,
         Self::EffortNotSent,
         Self::EngineRestarted,
@@ -217,6 +227,8 @@ impl NoticeCode {
         Self::ChecksNotRun,
         Self::ChecksUnavailable,
         Self::ChecksFailed,
+        Self::InstructionsRead,
+        Self::InstructionsCut,
     ];
 
     pub fn i18n_key(self) -> &'static str {
@@ -239,6 +251,8 @@ impl NoticeCode {
             Self::ChecksNotRun => "notice.checks-not-run",
             Self::ChecksUnavailable => "notice.checks-unavailable",
             Self::ChecksFailed => "notice.checks-failed",
+            Self::InstructionsRead => "notice.instructions-read",
+            Self::InstructionsCut => "notice.instructions-cut",
         }
     }
 
@@ -266,6 +280,8 @@ impl NoticeCode {
             Self::ChecksNotRun => &[],
             Self::ChecksUnavailable => &[],
             Self::ChecksFailed => &["code"],
+            Self::InstructionsRead => &["files", "chars"],
+            Self::InstructionsCut => &["files", "chars"],
         }
     }
 }

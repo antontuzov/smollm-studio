@@ -36,6 +36,10 @@ service or the host actually measured.
   including files the run created.
 - **Plan mode.** The same run as a read-only proposer, marked so it cannot be mistaken for a change
   that already happened.
+- **Your own rules, from your own files.** `~/.freecode/AGENTS.md` for the machine, `AGENTS.md` and
+  `.freecode/AGENTS.md` for the folder are read before a request goes out and carried in the run's
+  system turn. The transcript names which files were read, and says so when one was cut for length.
+  They say how the work should be done; they grant no access the approval dial withheld.
 - **Light and dark, eight interface styles, English and Russian.**
 
 ## Free models

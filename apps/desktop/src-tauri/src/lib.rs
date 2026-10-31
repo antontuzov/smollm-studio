@@ -14,6 +14,7 @@ mod diagnostics;
 mod extensions;
 mod free_models;
 mod github;
+mod instructions;
 mod opencode;
 mod paths;
 mod preview;
